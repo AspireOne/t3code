@@ -6,13 +6,12 @@ and server for running coding-agent providers across web, desktop, and mobile
 clients. It exists to carry a small number of focused fixes while remaining as
 close to upstream as practical.
 
-The initial motivation is
+The initial motivation was
 [#2441](https://github.com/pingdotgg/t3code/issues/2441): diffs and checkpoints
 can fail when a T3 workspace is a subdirectory of its Git repository. The
 workspace must remain rooted at that subdirectory; changing the project to the
-Git top-level is not an acceptable workaround. The fix is intentionally not
-part of the initial fork setup and should be developed later on a focused
-branch after rechecking current upstream code and related issues.
+Git top-level is not an acceptable workaround. This fork now carries the
+nested-workspace review and checkpoint fix.
 
 The fork currently adds a desktop notification when a newer stable upstream
 release is available. It does not download, merge, build, or install updates;
