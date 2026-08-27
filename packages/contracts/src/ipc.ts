@@ -242,6 +242,20 @@ export const DesktopUpdateStateSchema = Schema.Struct({
   canRetry: Schema.Boolean,
 });
 
+export interface DesktopUpstreamReleaseStatus {
+  currentVersion: string;
+  latestVersion: string;
+  releaseUrl: string;
+  updateAvailable: boolean;
+}
+
+export const DesktopUpstreamReleaseStatusSchema = Schema.Struct({
+  currentVersion: Schema.String,
+  latestVersion: Schema.String,
+  releaseUrl: Schema.String,
+  updateAvailable: Schema.Boolean,
+});
+
 export interface DesktopUpdateActionResult {
   accepted: boolean;
   completed: boolean;
@@ -1145,6 +1159,8 @@ export interface DesktopBridge {
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
   installUpdate: () => Promise<DesktopUpdateActionResult>;
   onUpdateState: (listener: (state: DesktopUpdateState) => void) => () => void;
+  /** Fork builds use this to advertise newer stable upstream source releases. */
+  checkUpstreamRelease?: () => Promise<DesktopUpstreamReleaseStatus | null>;
   /**
    * Desktop-only preview surface. Present iff the renderer is hosted by the
    * Electron desktop build; web builds have `preview === undefined`.

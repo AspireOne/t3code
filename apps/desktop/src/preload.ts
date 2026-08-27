@@ -164,6 +164,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.removeListener(IpcChannels.UPDATE_STATE_CHANNEL, wrappedListener);
     };
   },
+  checkUpstreamRelease: () => ipcRenderer.invoke(IpcChannels.UPSTREAM_RELEASE_CHECK_CHANNEL),
   preview: {
     createTab: (tabId, defaults) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_CREATE_TAB_CHANNEL, {
