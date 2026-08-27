@@ -210,7 +210,7 @@ export function ProviderSettingsPanel() {
     options.length === 1 && options[0]?.entry.target._tag === "PrimaryConnectionTarget";
   const deviceTabs =
     !onlyPrimaryDevice && options.length > 0 ? (
-      <div className="flex min-w-0 overflow-x-auto border-b border-border/70 px-3">
+      <div className="flex min-w-0 overflow-x-auto border-b border-border/70 px-3 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {options.map((environment) => {
           const Icon = providerEnvironmentIcon(environment);
           const selected = environment.environmentId === effectiveEnvironmentId;
