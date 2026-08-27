@@ -157,13 +157,20 @@ function ProviderEnvironmentSection(props: {
     props.environment.map(makeEnvironmentDraftRow),
   );
   const previousEnvironmentRef = useRef(props.environment);
+  const lastPublishedEnvironmentRef = useRef<
+    ReadonlyArray<ProviderInstanceEnvironmentVariable> | undefined
+  >(undefined);
 
   useEffect(() => {
     const previousEnvironment = previousEnvironmentRef.current;
+    const lastPublishedEnvironment = lastPublishedEnvironmentRef.current;
     previousEnvironmentRef.current = props.environment;
+    lastPublishedEnvironmentRef.current = undefined;
     if (
       previousEnvironment === props.environment ||
-      providerEnvironmentsEqual(previousEnvironment, props.environment)
+      providerEnvironmentsEqual(previousEnvironment, props.environment) ||
+      (lastPublishedEnvironment !== undefined &&
+        providerEnvironmentsEqual(lastPublishedEnvironment, props.environment))
     ) {
       return;
     }
@@ -188,6 +195,7 @@ function ProviderEnvironmentSection(props: {
       const { id: _id, ...rest } = row;
       published.push({ ...rest, name });
     }
+    lastPublishedEnvironmentRef.current = published;
     props.onChange(published);
   };
 
