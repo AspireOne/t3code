@@ -635,6 +635,66 @@ it.effect("backs off failed upstream refreshes across linked worktrees", () =>
   ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 
+it.effect("allows background upstream fetches to take longer than five seconds", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fetchStarted = yield* Deferred.make<void>();
+      const fetchCompleted = yield* Ref.make(false);
+      const slowFetchSpawner = ChildProcessSpawner.make((command) =>
+        Effect.gen(function* () {
+          if (!ChildProcess.isStandardCommand(command)) {
+            return yield* Effect.die("expected a standard Git command");
+          }
+          if (command.args.includes("fetch") && command.args.includes("--quiet")) {
+            yield* Deferred.succeed(fetchStarted, undefined);
+            return ChildProcessSpawner.makeHandle({
+              ...makeSuccessfulHandle(""),
+              exitCode: Effect.sleep("6 seconds").pipe(
+                Effect.tap(() => Ref.set(fetchCompleted, true)),
+                Effect.as(ChildProcessSpawner.ExitCode(0)),
+              ),
+            });
+          }
+          return yield* delegate.spawn(command);
+        }),
+      );
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, slowFetchSpawner),
+      );
+      const cwd = yield* makeTmpDir();
+      const remote = yield* makeTmpDir("git-vcs-driver-remote-");
+      const runGit = (args: ReadonlyArray<string>) =>
+        driver.execute({
+          operation: "GitVcsDriver.test.slowUpstreamRefresh",
+          cwd,
+          args,
+          timeoutMs: 10_000,
+        });
+
+      yield* driver.initRepo({ cwd });
+      yield* runGit(["config", "user.email", "test@test.com"]);
+      yield* runGit(["config", "user.name", "Test"]);
+      yield* writeTextFile(cwd, "README.md", "# test\n");
+      yield* runGit(["add", "."]);
+      yield* runGit(["commit", "-m", "initial commit"]);
+      const initialBranch = (yield* runGit(["branch", "--show-current"])).stdout.trim();
+      yield* runGit(["remote", "add", "origin", remote]);
+      yield* runGit(["update-ref", `refs/remotes/origin/${initialBranch}`, "HEAD"]);
+      yield* runGit(["branch", "--set-upstream-to", `origin/${initialBranch}`]);
+
+      const statusFiber = yield* driver
+        .statusDetailsRemote(cwd)
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(fetchStarted);
+      yield* TestClock.adjust("6 seconds");
+      yield* Fiber.join(statusFiber);
+
+      assert.isTrue(yield* Ref.get(fetchCompleted));
+    }),
+  ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
 it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
   describe("process environment", () => {
     it.effect("preserves the caller locale for general Git subprocesses", () =>

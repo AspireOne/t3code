@@ -181,6 +181,10 @@ self-hosted.example.test
   );
 });
 
+it("allows GitLab auth discovery enough time for self-hosted configurations", () => {
+  assert.strictEqual(GitLabSourceControlProvider.discovery.probeTimeoutMs, 20_000);
+});
+
 it("refines unknown GitLab remotes with mixed-case provider hosts", () => {
   const provider = GitLabSourceControlProvider.discovery.refineUnknownRemote?.({
     cwd: "/repo",
