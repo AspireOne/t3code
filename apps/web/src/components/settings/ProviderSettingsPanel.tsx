@@ -836,7 +836,7 @@ export function EnvironmentProviderSettings({
             description={`This session can view ${environmentLabel}'s providers, but its credential does not allow changing their configuration.`}
           />
         ) : null}
-        <div className={readOnly ? "space-y-1 opacity-50 select-none" : "space-y-1"}>
+        <div className="space-y-1">
           <div className="overflow-hidden rounded-lg border border-border/70 lg:grid lg:grid-cols-[20rem_minmax(0,1fr)]">
             <div className="border-b border-border/70 lg:border-r lg:border-b-0">
               <div className="flex min-h-9 items-center justify-between border-b border-border/70 px-3 text-[11px] font-medium text-muted-foreground">
@@ -871,7 +871,7 @@ export function EnvironmentProviderSettings({
               </div>
             </div>
 
-            <div className="min-w-0" inert={readOnly} aria-disabled={readOnly || undefined}>
+            <div className="min-w-0">
               {selectedRow ? (
                 renderProviderInstance(selectedRow, "editor")
               ) : (
@@ -880,7 +880,11 @@ export function EnvironmentProviderSettings({
             </div>
           </div>
 
-          <div inert={readOnly} aria-disabled={readOnly || undefined}>
+          <div
+            inert={readOnly}
+            aria-disabled={readOnly || undefined}
+            className={readOnly ? "opacity-50 select-none" : undefined}
+          >
             <Collapsible
               open={advancedVisible}
               onOpenChange={setAdvancedOpen}

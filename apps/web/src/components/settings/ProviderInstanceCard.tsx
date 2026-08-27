@@ -76,6 +76,25 @@ function makeEnvironmentDraftRow(
   };
 }
 
+function providerEnvironmentsEqual(
+  left: ReadonlyArray<ProviderInstanceEnvironmentVariable>,
+  right: ReadonlyArray<ProviderInstanceEnvironmentVariable>,
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((variable, index) => {
+      const other = right[index];
+      return (
+        other !== undefined &&
+        variable.name === other.name &&
+        variable.value === other.value &&
+        variable.sensitive === other.sensitive &&
+        variable.valueRedacted === other.valueRedacted
+      );
+    })
+  );
+}
+
 /**
  * Read a string[] at `key` from the opaque config blob, filtering out
  * non-string entries. Used for `customModels`, which is always typed as
@@ -140,8 +159,14 @@ function ProviderEnvironmentSection(props: {
   const previousEnvironmentRef = useRef(props.environment);
 
   useEffect(() => {
-    if (previousEnvironmentRef.current === props.environment) return;
+    const previousEnvironment = previousEnvironmentRef.current;
     previousEnvironmentRef.current = props.environment;
+    if (
+      previousEnvironment === props.environment ||
+      providerEnvironmentsEqual(previousEnvironment, props.environment)
+    ) {
+      return;
+    }
     setRows(props.environment.map(makeEnvironmentDraftRow));
   }, [props.environment]);
 
@@ -604,7 +629,14 @@ export function ProviderInstanceCard({
 
   return (
     <div className="min-w-0">
-      <div className="flex min-h-16 items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
+      <div
+        inert={readOnly}
+        aria-disabled={readOnly || undefined}
+        className={cn(
+          "flex min-h-16 items-center justify-between gap-3 border-b border-border/70 px-4 py-3",
+          readOnly && "opacity-50 select-none",
+        )}
+      >
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             {titleHeadNode}
@@ -736,7 +768,11 @@ export function ProviderInstanceCard({
         </button>
       </div>
 
-      <div className="px-4 py-5">
+      <div
+        inert={readOnly}
+        aria-disabled={readOnly || undefined}
+        className={cn("px-4 py-5", readOnly && "opacity-50 select-none")}
+      >
         <div className="space-y-5" hidden={visibleTab !== "configuration"}>
           <div>
             <label htmlFor={`provider-instance-${instanceId}-display-name`} className="block">
