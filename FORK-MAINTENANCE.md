@@ -66,7 +66,7 @@ Production endpoints are `https://app.t3.codes` and
 `https://relay.t3.codes`; do not add Clerk server secrets or deploy a relay.
 
 The packaged desktop app intentionally uses the normal T3 state locations.
-Close the official app before switching builds and back up `%APPDATA%\\t3code`
+Close the official app before switching builds and back up `%APPDATA%/t3code`
 and `~/.t3`. Do not run official and forked packaged WSL backends together:
 both currently use the distro's `~/.t3/userdata` database. Development runs
 should use `./.t3` or another explicit isolated base dir.
