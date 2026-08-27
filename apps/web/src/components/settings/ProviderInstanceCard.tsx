@@ -475,25 +475,16 @@ export function ProviderInstanceCard({
       displayName={displayName}
       accentColor={accentColor}
       showBadge={Boolean(accentColor)}
-      statusDotClassName={statusStyle.dot}
-      indicatorBackground="var(--card)"
       className="size-5"
       iconClassName="size-4 text-foreground/80"
       badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 px-0.5 text-[7px]"
     />
   ) : FallbackIconComponent ? (
-    <span className="relative inline-flex size-5 shrink-0 items-center justify-center">
+    <span className="inline-flex size-5 shrink-0 items-center justify-center">
       <FallbackIconComponent className="size-4 text-foreground/80" aria-hidden />
-      <span
-        className={cn(
-          "pointer-events-none absolute -left-0.5 -top-0.5 size-2 rounded-full ring-2 ring-card",
-          statusStyle.dot,
-        )}
-        aria-hidden
-      />
     </span>
   ) : (
-    <span className={cn("size-2 shrink-0 rounded-full", statusStyle.dot)} />
+    <span className="size-4 shrink-0 rounded-sm border border-border" aria-hidden />
   );
 
   const titleHeadNode = (
