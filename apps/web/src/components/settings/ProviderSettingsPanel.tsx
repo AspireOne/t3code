@@ -403,6 +403,7 @@ export function EnvironmentProviderSettings({
   const [isAddInstanceDialogOpen, setIsAddInstanceDialogOpen] = useState(false);
   const [selectedInstanceId, setSelectedInstanceId] = useState<ProviderInstanceId | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const advancedVisible = readOnly || advancedOpen;
   const [updatingProviderDrivers, setUpdatingProviderDrivers] = useState<
     ReadonlySet<ProviderDriverKind>
   >(() => new Set());
@@ -794,9 +795,8 @@ export function EnvironmentProviderSettings({
         headerAction={
           !readOnly ? (
             <Button
-              size="sm"
+              size="compact"
               variant="outline"
-              className="text-xs"
               onClick={() => setIsAddInstanceDialogOpen(true)}
             >
               <PlusIcon className="size-3.5" />
@@ -857,13 +857,13 @@ export function EnvironmentProviderSettings({
           </div>
 
           <Collapsible
-            open={advancedOpen}
+            open={advancedVisible}
             onOpenChange={setAdvancedOpen}
             className="mt-2 border-t border-border/70"
           >
             <CollapsibleTrigger className="flex h-10 w-full items-center gap-2 px-3 text-xs text-muted-foreground hover:text-foreground">
               <ChevronDownIcon
-                className={cn("size-3 transition-transform", advancedOpen && "rotate-180")}
+                className={cn("size-3 transition-transform", advancedVisible && "rotate-180")}
               />
               Advanced
             </CollapsibleTrigger>
