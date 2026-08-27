@@ -211,12 +211,8 @@ export function ProviderSettingsPanel() {
     options.length === 1 && options[0]?.entry.target._tag === "PrimaryConnectionTarget";
   const deviceTabs =
     !onlyPrimaryDevice && options.length > 0 ? (
-      <ScrollArea
-        hideScrollbars
-        scrollFade
-        className="h-11 min-w-0 rounded-none border-b border-border/70"
-      >
-        <div className="flex w-max min-w-full px-3">
+      <ScrollArea hideScrollbars scrollFade className="h-11 min-w-0 rounded-none">
+        <div className="flex h-full w-max min-w-full border-b border-border/70 px-3">
           {options.map((environment) => {
             const Icon = providerEnvironmentIcon(environment);
             const selected = environment.environmentId === effectiveEnvironmentId;
@@ -229,7 +225,7 @@ export function ProviderSettingsPanel() {
                       type="button"
                       aria-pressed={selected}
                       className={cn(
-                        "relative flex h-11 shrink-0 cursor-pointer items-center gap-2 rounded-sm px-3 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                        "relative flex h-full shrink-0 cursor-pointer items-center gap-2 rounded-sm px-3 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
                         selected
                           ? "text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-primary"
                           : "text-muted-foreground hover:text-foreground",
