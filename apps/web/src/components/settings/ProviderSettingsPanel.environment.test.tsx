@@ -178,21 +178,45 @@ describe("EnvironmentProviderSettings routing", () => {
     });
   });
 
-  it("renders the provider layout inert with a limited-permissions notice when read only", () => {
+  it("keeps provider selection available while write controls are read only", () => {
+    settingsState.value = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [customId]: {
+          driver: ProviderDriverKind.make("codex"),
+          enabled: true,
+        },
+      },
+    };
     atoms.providers = [provider()];
-    const panel = renderPanel({ readOnly: true });
+    let panel = renderPanel({ readOnly: true });
 
     const inertWrapper = visitElements(panel, (element) => element.props.inert === true);
     expect(inertWrapper).not.toBeNull();
-    const providerCard = visitElements(panel, (element) => element.props.instanceId === codexId);
-    expect(providerCard).not.toBeNull();
+
+    const customRow = visitElements(
+      panel,
+      (element) => element.props.instanceId === customId && element.props.mode === "list",
+    );
+    expect(customRow?.props.readOnly).toBe(true);
+    expect(customRow?.props.onSelect).toBeTypeOf("function");
+    (customRow?.props.onSelect as (() => void) | undefined)?.();
+
+    panel = renderPanel({ readOnly: true });
+    const customEditor = visitElements(
+      panel,
+      (element) => element.props.instanceId === customId && element.props.mode === "editor",
+    );
+    expect(customEditor).not.toBeNull();
 
     const notice = visitElements(panel, (element) => element.props.title === "Limited permissions");
     expect(notice).not.toBeNull();
 
-    expect(
-      visitElements(panel, (element) => element.props["aria-label"] === "Add provider instance"),
-    ).toBeNull();
+    const providersSection = visitElements(
+      panel,
+      (element) => element.props.title === "Providers" && "headerAction" in element.props,
+    );
+    expect(providersSection?.props.headerAction).toBeNull();
     expect(
       visitElements(panel, (element) => element.props["aria-label"] === "Refresh provider status"),
     ).toBeNull();
@@ -205,6 +229,11 @@ describe("EnvironmentProviderSettings routing", () => {
     expect(
       visitElements(panel, (element) => element.props.title === "Limited permissions"),
     ).toBeNull();
+    const providersSection = visitElements(
+      panel,
+      (element) => element.props.title === "Providers" && "headerAction" in element.props,
+    );
+    expect(providersSection?.props.headerAction).not.toBeNull();
   });
 
   it("deletes and resets provider configuration without erasing shared preferences", () => {

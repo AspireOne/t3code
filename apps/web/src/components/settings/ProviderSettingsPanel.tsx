@@ -755,6 +755,7 @@ export function EnvironmentProviderSettings({
         mode={mode}
         selected={mode === "list" && selectedRow?.instanceId === row.instanceId}
         onSelect={mode === "list" ? () => setSelectedInstanceId(row.instanceId) : undefined}
+        readOnly={readOnly}
         onUpdate={(next) => {
           const wasEnabled = resolveProviderInstanceEnabled(row.instance);
           const isDisabling = next.enabled === false && wasEnabled;
@@ -835,14 +836,7 @@ export function EnvironmentProviderSettings({
             description={`This session can view ${environmentLabel}'s providers, but its credential does not allow changing their configuration.`}
           />
         ) : null}
-        <div
-          // `inert` blocks focus and interaction in one attribute, so the
-          // read-only view stays byte-for-byte the editable layout without
-          // threading a disabled flag through every control.
-          inert={readOnly}
-          aria-disabled={readOnly || undefined}
-          className={readOnly ? "space-y-1 opacity-50 select-none" : "space-y-1"}
-        >
+        <div className={readOnly ? "space-y-1 opacity-50 select-none" : "space-y-1"}>
           <div className="overflow-hidden rounded-lg border border-border/70 lg:grid lg:grid-cols-[20rem_minmax(0,1fr)]">
             <div className="border-b border-border/70 lg:border-r lg:border-b-0">
               <div className="flex min-h-9 items-center justify-between border-b border-border/70 px-3 text-[11px] font-medium text-muted-foreground">
@@ -877,7 +871,7 @@ export function EnvironmentProviderSettings({
               </div>
             </div>
 
-            <div className="min-w-0">
+            <div className="min-w-0" inert={readOnly} aria-disabled={readOnly || undefined}>
               {selectedRow ? (
                 renderProviderInstance(selectedRow, "editor")
               ) : (
@@ -886,81 +880,83 @@ export function EnvironmentProviderSettings({
             </div>
           </div>
 
-          <Collapsible
-            open={advancedVisible}
-            onOpenChange={setAdvancedOpen}
-            className="mt-2 border-t border-border/70"
-          >
-            <CollapsibleTrigger className="flex h-10 w-full items-center gap-2 px-3 text-xs text-muted-foreground hover:text-foreground sm:px-4">
-              <ChevronDownIcon
-                className={cn("size-3 transition-transform", advancedVisible && "rotate-180")}
-              />
-              Advanced
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              <SettingsRow
-                title={
-                  <span className="inline-flex items-center gap-1.5">
-                    Health check interval
-                    <PolicyTooltip>
-                      This interval is configured here, then the shared Background activity policy
-                      decides whether provider probes may run when the timer fires. Custom intervals
-                      appear as Advanced in General settings.
-                    </PolicyTooltip>
-                  </span>
-                }
-                description="Set this to 0 seconds to use manual refresh only."
-                resetAction={
-                  providerHealthRefreshIntervalSeconds !==
-                  defaultProviderHealthRefreshIntervalSeconds ? (
-                    <SettingResetButton
-                      label="provider health check interval"
-                      onClick={() =>
-                        updateSettings(
-                          backgroundActivityOverrideSettings(
-                            settings.backgroundActivity,
-                            resolvedBackgroundActivity,
-                            { providerHealthRefreshInterval: undefined },
-                          ),
-                        )
-                      }
-                    />
-                  ) : null
-                }
-                control={
-                  <div className="flex shrink-0 items-center gap-2">
-                    <NumberField
-                      value={providerHealthRefreshIntervalSeconds}
-                      min={0}
-                      step={PROVIDER_HEALTH_INTERVAL_STEP_SECONDS}
-                      size="sm"
-                      className="w-32"
-                      onValueChange={(value) =>
-                        updateSettings(
-                          backgroundActivityOverrideSettings(
-                            settings.backgroundActivity,
-                            resolvedBackgroundActivity,
-                            {
-                              providerHealthRefreshInterval: Duration.seconds(
-                                normalizeIntervalSeconds(value),
-                              ),
-                            },
-                          ),
-                        )
-                      }
-                    >
-                      <NumberFieldGroup>
-                        <NumberFieldDecrement aria-label="Decrease provider health check interval" />
-                        <NumberFieldInput aria-label="Provider health check interval in seconds" />
-                        <NumberFieldIncrement aria-label="Increase provider health check interval" />
-                      </NumberFieldGroup>
-                    </NumberField>
-                    <span className="text-xs text-muted-foreground">seconds</span>
-                  </div>
-                }
-              />
-            </CollapsibleContent>
-          </Collapsible>
+          <div inert={readOnly} aria-disabled={readOnly || undefined}>
+            <Collapsible
+              open={advancedVisible}
+              onOpenChange={setAdvancedOpen}
+              className="mt-2 border-t border-border/70"
+            >
+              <CollapsibleTrigger className="flex h-10 w-full items-center gap-2 px-3 text-xs text-muted-foreground hover:text-foreground sm:px-4">
+                <ChevronDownIcon
+                  className={cn("size-3 transition-transform", advancedVisible && "rotate-180")}
+                />
+                Advanced
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <SettingsRow
+                  title={
+                    <span className="inline-flex items-center gap-1.5">
+                      Health check interval
+                      <PolicyTooltip>
+                        This interval is configured here, then the shared Background activity policy
+                        decides whether provider probes may run when the timer fires. Custom
+                        intervals appear as Advanced in General settings.
+                      </PolicyTooltip>
+                    </span>
+                  }
+                  description="Set this to 0 seconds to use manual refresh only."
+                  resetAction={
+                    providerHealthRefreshIntervalSeconds !==
+                    defaultProviderHealthRefreshIntervalSeconds ? (
+                      <SettingResetButton
+                        label="provider health check interval"
+                        onClick={() =>
+                          updateSettings(
+                            backgroundActivityOverrideSettings(
+                              settings.backgroundActivity,
+                              resolvedBackgroundActivity,
+                              { providerHealthRefreshInterval: undefined },
+                            ),
+                          )
+                        }
+                      />
+                    ) : null
+                  }
+                  control={
+                    <div className="flex shrink-0 items-center gap-2">
+                      <NumberField
+                        value={providerHealthRefreshIntervalSeconds}
+                        min={0}
+                        step={PROVIDER_HEALTH_INTERVAL_STEP_SECONDS}
+                        size="sm"
+                        className="w-32"
+                        onValueChange={(value) =>
+                          updateSettings(
+                            backgroundActivityOverrideSettings(
+                              settings.backgroundActivity,
+                              resolvedBackgroundActivity,
+                              {
+                                providerHealthRefreshInterval: Duration.seconds(
+                                  normalizeIntervalSeconds(value),
+                                ),
+                              },
+                            ),
+                          )
+                        }
+                      >
+                        <NumberFieldGroup>
+                          <NumberFieldDecrement aria-label="Decrease provider health check interval" />
+                          <NumberFieldInput aria-label="Provider health check interval in seconds" />
+                          <NumberFieldIncrement aria-label="Increase provider health check interval" />
+                        </NumberFieldGroup>
+                      </NumberField>
+                      <span className="text-xs text-muted-foreground">seconds</span>
+                    </div>
+                  }
+                />
+              </CollapsibleContent>
+            </Collapsible>
+          </div>
         </div>
       </SettingsSection>
 

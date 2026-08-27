@@ -303,6 +303,7 @@ interface ProviderInstanceCardProps {
   readonly mode: "list" | "editor";
   readonly selected?: boolean | undefined;
   readonly onSelect?: (() => void) | undefined;
+  readonly readOnly?: boolean | undefined;
   readonly onUpdate: (nextInstance: ProviderInstanceConfig) => void;
   /**
    * Pass `undefined` to hide the delete button entirely. Built-in default
@@ -356,6 +357,7 @@ export function ProviderInstanceCard({
   mode,
   selected = false,
   onSelect,
+  readOnly = false,
   onUpdate,
   onDelete,
   headerAction,
@@ -585,6 +587,7 @@ export function ProviderInstanceCard({
         </button>
         <Switch
           checked={enabled}
+          disabled={readOnly}
           onCheckedChange={(checked) => updateEnabled(Boolean(checked))}
           aria-label={`Enable ${displayName}`}
         />
