@@ -55,9 +55,15 @@ switch ($Action) {
       throw "Installer was not found at $InstallerPath."
     }
 
-    $installer = Start-Process -FilePath $InstallerPath -ArgumentList "/S" -Wait -PassThru
-    if ($installer.ExitCode -ne 0) {
-      throw "T3 Code installer failed with exit code $($installer.ExitCode)."
+    $localInstaller = Join-Path ([IO.Path]::GetTempPath()) "t3code-fork-$([guid]::NewGuid()).exe"
+    try {
+      Copy-Item -LiteralPath $InstallerPath -Destination $localInstaller
+      $installer = Start-Process -FilePath $localInstaller -ArgumentList "/S" -Wait -PassThru
+      if ($installer.ExitCode -ne 0) {
+        throw "T3 Code installer failed with exit code $($installer.ExitCode)."
+      }
+    } finally {
+      Remove-Item -LiteralPath $localInstaller -Force -ErrorAction SilentlyContinue
     }
     if (-not (Test-Path -LiteralPath $installedExe)) {
       throw "The installed T3 executable was not found at $installedExe."
