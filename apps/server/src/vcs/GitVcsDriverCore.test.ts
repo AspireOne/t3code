@@ -15,6 +15,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { GitCommandError, type ReviewDiffFileContentsInput } from "@t3tools/contracts";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { ServerConfig } from "../config.ts";
 import { makeGitVcsDriverCore, splitNullSeparatedGitStdoutPaths } from "./GitVcsDriverCore.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
@@ -781,6 +782,49 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         });
 
         assert.deepStrictEqual(paths, ["complete.txt", "final.txt"]);
+      }),
+    );
+
+    it.effect("scopes untracked diffs to a symlinked nested workspace", () =>
+      Effect.gen(function* () {
+        const repositoryRoot = yield* makeTmpDir();
+        yield* initRepoWithCommit(repositoryRoot);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const pathService = yield* Path.Path;
+        const linksRoot = yield* makeTmpDir("git-vcs-driver-links-");
+        const linkedRepositoryRoot = pathService.join(linksRoot, "repository");
+        yield* fileSystem.symlink(repositoryRoot, linkedRepositoryRoot);
+        const workspaceRoot = pathService.join(linkedRepositoryRoot, "workspace");
+        yield* writeTextFile(repositoryRoot, "workspace/inside.ts", "export {};\n");
+        yield* writeTextFile(repositoryRoot, "outside.ts", "export {};\n");
+
+        const result = yield* driver.getReviewDiffPreview({ cwd: workspaceRoot });
+
+        const workingTree = result.sources.find((source) => source.kind === "working-tree");
+        assert.ok(workingTree);
+        assert.include(workingTree.diff, "workspace/inside.ts");
+        assert.notInclude(workingTree.diff, "outside.ts");
+      }),
+    );
+
+    it.effect("does not interpret nested workspace names as Git pathspec magic", () =>
+      Effect.gen(function* () {
+        if ((yield* HostProcessPlatform) === "win32") return;
+        const repositoryRoot = yield* makeTmpDir();
+        yield* initRepoWithCommit(repositoryRoot);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const pathService = yield* Path.Path;
+        const workspaceRoot = pathService.join(repositoryRoot, ":(glob)**");
+        yield* writeTextFile(repositoryRoot, ":(glob)**/inside.ts", "export {};\n");
+        yield* writeTextFile(repositoryRoot, "outside.ts", "export {};\n");
+
+        const result = yield* driver.getReviewDiffPreview({ cwd: workspaceRoot });
+
+        const workingTree = result.sources.find((source) => source.kind === "working-tree");
+        assert.ok(workingTree);
+        assert.include(workingTree.diff, ":(glob)**/inside.ts");
+        assert.notInclude(workingTree.diff, "outside.ts");
       }),
     );
 

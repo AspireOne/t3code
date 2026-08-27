@@ -2174,10 +2174,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   });
 
   const readUntrackedReviewDiffs = Effect.fn("readUntrackedReviewDiffs")(function* (cwd: string) {
+    const repositoryPaths = yield* resolveRepositoryPaths(cwd);
+    const repositoryRoot = repositoryPaths?.worktreeRoot ?? cwd;
     const untrackedResult = yield* executeGit(
       "GitVcsDriver.readUntrackedReviewDiffs.list",
       cwd,
-      ["ls-files", "--others", "--exclude-standard", "-z"],
+      ["ls-files", "--others", "--exclude-standard", "--full-name", "-z"],
       {
         maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
         appendTruncationMarker: true,
@@ -2193,7 +2195,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       (relativePath) =>
         executeGit(
           "GitVcsDriver.readUntrackedReviewDiffs.diff",
-          cwd,
+          repositoryRoot,
           [
             "diff",
             "--no-index",

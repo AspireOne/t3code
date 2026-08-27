@@ -3,6 +3,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import {
@@ -16,6 +17,7 @@ import {
 } from "@t3tools/contracts";
 
 import * as ServerConfig from "../config.ts";
+import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 
@@ -35,6 +37,7 @@ export const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;
   const git = yield* GitVcsDriver.GitVcsDriver;
 
@@ -76,13 +79,30 @@ export const make = Effect.gen(function* () {
       return;
     }
 
+    const registeredProject = yield* projectionSnapshotQuery
+      .getActiveProjectByWorkspaceRoot(cwd)
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new VcsRepositoryDetectionError({
+              operation,
+              cwd,
+              detail: "Failed to verify the requested review workspace.",
+              cause,
+            }),
+        ),
+      );
+    if (Option.isSome(registeredProject)) {
+      return;
+    }
+
     return yield* new VcsRepositoryDetectionError({
       operation,
       cwd,
       detail:
         operation === "ReviewService.getDiffPreview"
-          ? "Review diff preview cwd must stay within the configured workspace root."
-          : "Review diff file contents cwd must stay within the configured workspace root.",
+          ? "Review diff preview cwd must be a registered project or stay within a configured workspace root."
+          : "Review diff file contents cwd must be a registered project or stay within a configured workspace root.",
     });
   });
 

@@ -286,13 +286,21 @@ describe("CheckpointReactor", () => {
     readonly providerSessionCwd?: string;
     readonly providerName?: ProviderDriverKind;
     readonly gitStatusRefreshCalls?: Array<string>;
+    readonly nestedWorkspace?: boolean;
   }) {
     const cwd = createGitRepository();
     tempDirs.push(cwd);
+    const workspaceCwd = options?.nestedWorkspace ? NodePath.join(cwd, "frontend") : cwd;
+    if (options?.nestedWorkspace) {
+      NodeFS.mkdirSync(workspaceCwd);
+      NodeFS.writeFileSync(NodePath.join(workspaceCwd, "README.md"), "v1\n", "utf8");
+      runGit(cwd, ["add", "."]);
+      runGit(cwd, ["commit", "-m", "Add frontend workspace"]);
+    }
     const provider = createProviderServiceHarness(
-      cwd,
+      workspaceCwd,
       options?.hasSession ?? true,
-      options?.providerSessionCwd ?? cwd,
+      options?.providerSessionCwd ?? workspaceCwd,
       options?.providerName ?? ProviderDriverKind.make("codex"),
     );
     const orchestrationLayer = OrchestrationEngineLive.pipe(
@@ -372,7 +380,7 @@ describe("CheckpointReactor", () => {
         commandId: CommandId.make("cmd-project-create"),
         projectId: asProjectId("project-1"),
         title: "Test Project",
-        workspaceRoot: options?.projectWorkspaceRoot ?? cwd,
+        workspaceRoot: options?.projectWorkspaceRoot ?? workspaceCwd,
         defaultModelSelection: {
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5-codex",
@@ -395,7 +403,12 @@ describe("CheckpointReactor", () => {
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
           branch: options?.threadBranch ?? null,
-          worktreePath: options?.threadWorktreePath ?? cwd,
+          worktreePath:
+            options?.threadWorktreePath !== undefined
+              ? options.threadWorktreePath
+              : options?.nestedWorkspace
+                ? null
+                : cwd,
           createdAt,
         })
         .pipe(
@@ -450,9 +463,53 @@ describe("CheckpointReactor", () => {
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       provider,
       cwd,
+      workspaceCwd,
       drain,
     };
   }
+
+  it("captures checkpoints when the project cwd is nested below the Git root", async () => {
+    const harness = await createHarness({
+      nestedWorkspace: true,
+      seedFilesystemCheckpoints: false,
+    });
+
+    harness.provider.emit({
+      type: "turn.started",
+      eventId: EventId.make("evt-turn-started-nested-workspace"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: ThreadId.make("thread-1"),
+      turnId: asTurnId("turn-nested-workspace"),
+    });
+    await waitForGitRefExists(
+      harness.cwd,
+      checkpointRefForThreadTurn(ThreadId.make("thread-1"), 0),
+    );
+
+    NodeFS.writeFileSync(NodePath.join(harness.workspaceCwd, "README.md"), "v2\n", "utf8");
+    harness.provider.emit({
+      type: "turn.completed",
+      eventId: EventId.make("evt-turn-completed-nested-workspace"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: ThreadId.make("thread-1"),
+      turnId: asTurnId("turn-nested-workspace"),
+      payload: { state: "completed" },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.checkpoints.some((checkpoint) => checkpoint.checkpointTurnCount === 1),
+    );
+    expect(thread.checkpoints).toHaveLength(1);
+    expect(
+      gitShowFileAtRef(
+        harness.cwd,
+        checkpointRefForThreadTurn(ThreadId.make("thread-1"), 1),
+        "frontend/README.md",
+      ),
+    ).toBe("v2\n");
+  });
 
   it("captures pre-turn baseline on turn.started and post-turn checkpoint on turn.completed", async () => {
     const harness = await createHarness({ seedFilesystemCheckpoints: false });
