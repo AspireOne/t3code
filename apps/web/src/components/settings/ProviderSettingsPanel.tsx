@@ -230,10 +230,10 @@ export function ProviderSettingsPanel() {
               <Icon className="size-3.5 shrink-0" aria-hidden />
               <span className="max-w-40 truncate">{environment.label}</span>
               <ConnectionStatusDot
-                tooltipText={statusText}
                 dotClassName={connectionPhaseDotClassName(environment.connection.phase)}
                 pingClassName={connectionPhasePingClassName(environment.connection.phase)}
               />
+              <span className="sr-only">{statusText}</span>
             </button>
           );
         })}

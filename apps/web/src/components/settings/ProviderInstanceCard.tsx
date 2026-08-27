@@ -376,7 +376,7 @@ export function ProviderInstanceCard({
     : "disabled";
   const statusStyle = PROVIDER_STATUS_STYLES[statusKey];
   const rawSummary = getProviderSummary(liveProvider);
-  const summary = rawSummary;
+  const summary = enabled ? rawSummary : { headline: "Disabled", detail: null };
   const versionLabel = getProviderVersionLabel(liveProvider?.version);
   const versionAdvisory = getProviderVersionAdvisoryPresentation(liveProvider?.versionAdvisory);
   const updateCommand = versionAdvisory?.updateCommand ?? null;
