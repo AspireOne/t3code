@@ -58,6 +58,7 @@ repo_root=$(git -C "$script_dir" rev-parse --show-toplevel)
 git_dir=$(git -C "$repo_root" rev-parse --git-dir)
 [[ "$git_dir" = /* ]] || git_dir="$repo_root/$git_dir"
 linux_home=$(getent passwd "$(id -u)" | cut -d: -f6)
+support_dir="$repo_root/.agents/skills/updating-t3-fork/scripts"
 
 [[ -n "${WSL_DISTRO_NAME:-}" ]] || fail "run this helper from WSL"
 
@@ -80,8 +81,8 @@ dirty=$(git status --porcelain --untracked-files=normal)
   fail "remote 'upstream' is not https://github.com/pingdotgg/t3code.git"
 
 repo_root_windows=$(wslpath -w "$repo_root")
-resource_script_windows=$(wslpath -w "$script_dir/build-resource-monitor-windows.ps1")
-manager_script_windows=$(wslpath -w "$script_dir/manage-windows-t3.ps1")
+resource_script_windows=$(wslpath -w "$support_dir/build-resource-monitor-windows.ps1")
+manager_script_windows=$(wslpath -w "$support_dir/manage-windows-t3.ps1")
 
 printf 'Repository: %s\n' "$repo_root"
 printf 'Commit: %s\n' "$(git rev-parse HEAD)"

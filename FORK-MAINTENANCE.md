@@ -1,8 +1,19 @@
 # AspireOne T3 Code fork
 
-This fork is kept close to `upstream/main`; keep local work in small,
-focused branches. The tested snapshot is
-`f6f2be32d8bc072e87753e41ad77c7c67e8b0b95`.
+This fork is kept close to official upstream releases; keep fork changes in
+small, focused commits.
+
+## Quick build / install
+
+From the repository root in WSL:
+
+```sh
+# Build and validate without touching the installed app.
+./build-install-windows.sh --build-only
+
+# Build, back up state, install, relaunch, and verify WSL health.
+./build-install-windows.sh
+```
 
 ## Sync `main`
 
@@ -13,18 +24,10 @@ validates the result before moving `main`, pushing `origin/main`, and deleting
 the temporary branch. Those final steps are skipped only for an explicitly
 local-only, dry-run, or build-only update.
 
-The following fast-forward workflow applies only while `main` contains no
-fork-only commits:
-
-```sh
-git switch main
-git fetch upstream
-git merge --ff-only upstream/main
-git push origin main
-```
-
 `origin` is the fork and `upstream` is `pingdotgg/t3code`. Never push to
-`upstream`.
+`upstream`; its push URL is intentionally disabled. Do not sync by merging
+`upstream/main`: it may contain unreleased work. The skill selects and merges
+the exact latest stable release tag.
 
 ## Install and run from source
 
@@ -43,23 +46,23 @@ repo-pinned Node/pnpm versions for commands run through `vp`.
 
 ## Windows artifact
 
-The normal output is `release/T3-Code-<version>-x64.exe`. For WSL support,
-provide the Linux `node-pty` prebuild. When packaging from WSL, build the
-Windows resource monitor with the MSVC Developer PowerShell and ensure Wine
-is installed for Electron Builder's NSIS step:
+Use the tested helper from WSL. It installs repository dependencies, builds the
+resource monitor with Windows MSVC, supplies the Linux `node-pty` prebuild for
+WSL mode, and runs Electron Builder through Wine:
 
 ```sh
-cargo build --locked --release \
-  --manifest-path native/resource-monitor/Cargo.toml \
-  --target x86_64-pc-windows-msvc
-
-T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR=true \
-  vp run dist:desktop:win:x64 \
-  --wsl-prebuild "$PWD/apps/server/node_modules/node-pty/build/Release/pty.node"
+# Check prerequisites only.
+./build-install-windows.sh --preflight
 ```
 
-The artifact tested from this snapshot is
-`release/T3-Code-0.0.35-x64.exe` (unsigned; updates are manual).
+For the build and install commands, see [Quick build / install](#quick-build--install)
+above.
+
+The normal output is `release/T3-Code-<version>-x64.exe`. The helper prints the
+source commit, artifact path, and SHA-256 for each build. Artifacts are unsigned
+and installation remains manual. Current one-time prerequisites are Vite+,
+Windows Rust/MSVC tooling, PowerShell, and working 64/32-bit Wine in WSL; the
+helper does not install system packages.
 
 ## Connect and state
 
@@ -75,10 +78,11 @@ node apps/server/dist/bin.mjs connect status --base-dir "$PWD/.t3"
 Production endpoints are `https://app.t3.codes` and
 `https://relay.t3.codes`; do not add Clerk server secrets or deploy a relay.
 
-The packaged desktop app intentionally uses the normal T3 state locations.
-Close the official app before switching builds and back up `%APPDATA%/t3code`
-and `~/.t3`. Do not run official and forked packaged WSL backends together:
-both currently use the distro's `~/.t3/userdata` database. Development runs
-should use `./.t3` or another explicit isolated base dir.
+The packaged desktop app intentionally uses the normal T3 identity and state
+locations. The install helper closes that exact per-user installation and backs
+up `~/.t3` plus `%APPDATA%/t3code` and `%APPDATA%/T3 Code (Alpha)` when present.
+Do not run official and forked packaged WSL backends together: both currently
+use the distro's `~/.t3/userdata` database. Development runs should use `./.t3`
+or another explicit isolated base dir.
 
 This fork does not include the nested-workspace diff/checkpoint fix.

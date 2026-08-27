@@ -79,10 +79,10 @@ for installation or an end-to-end update.
 For the current WSL-to-Windows packaging path, use:
 
 ```sh
-.agents/skills/updating-t3-fork/scripts/build-install-windows.sh
+./build-install-windows.sh
 ```
 
-The helper builds first, then gracefully closes the exact installed T3
+The root helper builds first, then gracefully closes the exact installed T3
 executable, waits for its WSL backend to stop, snapshots persistent state,
 installs the new NSIS artifact, relaunches it, and verifies local WSL health.
 It refuses dirty trees and does not force-kill the app. Use `--build-only` when

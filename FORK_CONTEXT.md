@@ -14,6 +14,10 @@ Git top-level is not an acceptable workaround. The fix is intentionally not
 part of the initial fork setup and should be developed later on a focused
 branch after rechecking current upstream code and related issues.
 
+The fork currently adds a desktop notification when a newer stable upstream
+release is available. It does not download, merge, build, or install updates;
+release synchronization remains the explicit workflow documented below.
+
 Fork builds should preserve normal T3 behavior, including Codex, Windows/WSL,
 and T3's production Connect infrastructure; they must not introduce client
 secrets or an unnecessary self-hosted relay. Packaged official and fork builds

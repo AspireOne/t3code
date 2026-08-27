@@ -77,32 +77,32 @@ trial, dry run, or build-only operation.
 The helper is intended to be run from WSL after the merge result is clean:
 
 ```sh
-.agents/skills/updating-t3-fork/scripts/build-install-windows.sh
+./build-install-windows.sh
 ```
 
 Useful modes:
 
 ```sh
 # Validate prerequisites without building or changing the installation.
-.agents/skills/updating-t3-fork/scripts/build-install-windows.sh --preflight
+./build-install-windows.sh --preflight
 
 # Build and validate the artifact, leaving the running installation untouched.
-.agents/skills/updating-t3-fork/scripts/build-install-windows.sh --build-only
+./build-install-windows.sh --build-only
 
 # Build, back up state, install, and relaunch without waiting for WSL health.
-.agents/skills/updating-t3-fork/scripts/build-install-windows.sh --no-verify
+./build-install-windows.sh --no-verify
 ```
 
 Current one-time prerequisites are the repo-pinned Vite+ toolchain, Windows
-Rust/MSVC tooling, PowerShell, and Wine in WSL for Electron Builder's Windows
-resource-editing step. The helper deliberately does not install system
-packages.
+Rust/MSVC tooling, PowerShell, and working 64/32-bit Wine in WSL for Electron
+Builder's Windows packaging step. The helper deliberately does not install
+system packages.
 
 The installed fork currently replaces the standard per-user T3 installation
 and shares normal Windows and WSL state with official builds. The helper closes
-the exact installed executable and backs up `%APPDATA%/t3code` and `~/.t3`
-before installation. It does not support simultaneous official and forked WSL
-backends or a side-by-side fork package.
+the exact installed executable and backs up `~/.t3`, `%APPDATA%/t3code`, and
+`%APPDATA%/T3 Code (Alpha)` when present. It does not support simultaneous
+official and forked WSL backends or a side-by-side fork package.
 
 ## Future CI boundary
 
