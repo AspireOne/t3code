@@ -40,7 +40,7 @@ import type { DriverOption } from "./providerDriverMeta";
 import { providerSettingsTabClassName } from "./providerSettingsTabs";
 import { ProviderSettingsForm } from "./ProviderSettingsForm";
 import { ProviderModelsSection } from "./ProviderModelsSection";
-import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
+import { ProviderInstanceIcon, providerInstanceInitials } from "../chat/ProviderInstanceIcon";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
 import {
   getProviderVersionAdvisoryPresentation,
@@ -487,7 +487,12 @@ export function ProviderInstanceCard({
       <FallbackIconComponent className="size-4 text-foreground/80" aria-hidden />
     </span>
   ) : (
-    <span className="size-4 shrink-0 rounded-sm border border-border" aria-hidden />
+    <span
+      className="inline-flex size-5 shrink-0 items-center justify-center text-[10px] font-semibold leading-none text-foreground/80"
+      aria-hidden
+    >
+      {providerInstanceInitials(displayName)}
+    </span>
   );
 
   const titleHeadNode = (
