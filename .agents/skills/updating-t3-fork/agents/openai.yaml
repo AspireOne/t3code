@@ -1,0 +1,4 @@
+interface:
+  display_name: "Update T3 Fork"
+  short_description: "Sync, build, and install the T3 fork"
+  default_prompt: "Use $updating-t3-fork to sync this fork to the latest stable upstream release, validate it, and install the Windows desktop build."

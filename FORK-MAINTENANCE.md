@@ -6,6 +6,16 @@ focused branches. The tested snapshot is
 
 ## Sync `main`
 
+For an official release update, use the repository's
+[`updating-t3-fork`](./.agents/skills/updating-t3-fork/SKILL.md) skill.
+It merges the exact stable release tag on a temporary integration branch and
+validates the result before moving `main`, pushing `origin/main`, and deleting
+the temporary branch. Those final steps are skipped only for an explicitly
+local-only, dry-run, or build-only update.
+
+The following fast-forward workflow applies only while `main` contains no
+fork-only commits:
+
 ```sh
 git switch main
 git fetch upstream
