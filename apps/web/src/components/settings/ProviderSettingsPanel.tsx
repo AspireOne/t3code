@@ -834,7 +834,7 @@ export function EnvironmentProviderSettings({
                 <span>On</span>
               </div>
               {rows.map((row) => renderProviderInstance(row, "list"))}
-              <div className="flex min-h-10 items-center justify-between border-t border-border/70 px-3">
+              <div className="flex min-h-10 items-center justify-between px-3">
                 <ProviderLastChecked lastCheckedAt={lastCheckedAt} />
                 {!readOnly ? (
                   <Tooltip>
