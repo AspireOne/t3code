@@ -157,6 +157,14 @@ function providerEnvironmentIcon(environment: EnvironmentPresentation) {
   return CloudIcon;
 }
 
+function providerEnvironmentDetail(environment: EnvironmentPresentation): string {
+  if (environment.entry.target._tag === "PrimaryConnectionTarget") return "Primary device";
+  if (environment.relayManaged) return "T3 Connect";
+  if (environment.entry.target._tag === "SshConnectionTarget") return "SSH";
+  if (isDesktopLocalConnectionTarget(environment.entry.target)) return "Local device";
+  return environment.displayUrl ?? "Remote device";
+}
+
 function EnvironmentUnavailableRow({
   environment,
   access,
@@ -212,10 +220,15 @@ export function ProviderSettingsPanel() {
   const deviceTabs =
     !onlyPrimaryDevice && options.length > 0 ? (
       <ScrollArea hideScrollbars scrollFade className="h-11 min-w-0 rounded-none">
-        <div className="flex h-full w-max min-w-full border-b border-border/70 px-3">
+        <div
+          role="group"
+          aria-label="Devices"
+          className="flex h-full w-max min-w-full border-b border-border/70 px-3"
+        >
           {options.map((environment) => {
             const Icon = providerEnvironmentIcon(environment);
             const selected = environment.environmentId === effectiveEnvironmentId;
+            const detail = providerEnvironmentDetail(environment);
             const statusText = connectionStatusText(environment.connection);
             return (
               <Tooltip key={environment.environmentId}>
@@ -238,11 +251,15 @@ export function ProviderSettingsPanel() {
                         dotClassName={connectionPhaseDotClassName(environment.connection.phase)}
                         pingClassName={connectionPhasePingClassName(environment.connection.phase)}
                       />
-                      <span className="sr-only">{statusText}</span>
+                      <span className="sr-only">
+                        {detail}, {statusText}
+                      </span>
                     </button>
                   }
                 />
-                <TooltipPopup side="top">{statusText}</TooltipPopup>
+                <TooltipPopup side="top">
+                  {detail} · {statusText}
+                </TooltipPopup>
               </Tooltip>
             );
           })}
@@ -878,7 +895,7 @@ export function EnvironmentProviderSettings({
             onOpenChange={setAdvancedOpen}
             className="mt-2 border-t border-border/70"
           >
-            <CollapsibleTrigger className="flex h-10 w-full items-center gap-2 px-3 text-xs text-muted-foreground hover:text-foreground">
+            <CollapsibleTrigger className="flex h-10 w-full items-center gap-2 px-3 text-xs text-muted-foreground hover:text-foreground sm:px-4">
               <ChevronDownIcon
                 className={cn("size-3 transition-transform", advancedVisible && "rotate-180")}
               />
