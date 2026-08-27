@@ -71,6 +71,7 @@ import {
   NumberFieldIncrement,
   NumberFieldInput,
 } from "../ui/number-field";
+import { ScrollArea } from "../ui/scroll-area";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
@@ -210,41 +211,47 @@ export function ProviderSettingsPanel() {
     options.length === 1 && options[0]?.entry.target._tag === "PrimaryConnectionTarget";
   const deviceTabs =
     !onlyPrimaryDevice && options.length > 0 ? (
-      <div className="flex min-w-0 overflow-x-auto border-b border-border/70 px-3 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {options.map((environment) => {
-          const Icon = providerEnvironmentIcon(environment);
-          const selected = environment.environmentId === effectiveEnvironmentId;
-          const statusText = connectionStatusText(environment.connection);
-          return (
-            <Tooltip key={environment.environmentId}>
-              <TooltipTrigger
-                render={
-                  <button
-                    type="button"
-                    aria-pressed={selected}
-                    className={cn(
-                      "relative flex h-11 shrink-0 cursor-pointer items-center gap-2 rounded-sm px-3 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-                      selected
-                        ? "text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-primary"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                    onClick={() => setSelectedEnvironmentId(environment.environmentId)}
-                  >
-                    <Icon className="size-3.5 shrink-0" aria-hidden />
-                    <span className="max-w-40 truncate">{environment.label}</span>
-                    <ConnectionStatusDot
-                      dotClassName={connectionPhaseDotClassName(environment.connection.phase)}
-                      pingClassName={connectionPhasePingClassName(environment.connection.phase)}
-                    />
-                    <span className="sr-only">{statusText}</span>
-                  </button>
-                }
-              />
-              <TooltipPopup side="top">{statusText}</TooltipPopup>
-            </Tooltip>
-          );
-        })}
-      </div>
+      <ScrollArea
+        hideScrollbars
+        scrollFade
+        className="h-11 min-w-0 rounded-none border-b border-border/70"
+      >
+        <div className="flex w-max min-w-full px-3">
+          {options.map((environment) => {
+            const Icon = providerEnvironmentIcon(environment);
+            const selected = environment.environmentId === effectiveEnvironmentId;
+            const statusText = connectionStatusText(environment.connection);
+            return (
+              <Tooltip key={environment.environmentId}>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-pressed={selected}
+                      className={cn(
+                        "relative flex h-11 shrink-0 cursor-pointer items-center gap-2 rounded-sm px-3 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                        selected
+                          ? "text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-primary"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                      onClick={() => setSelectedEnvironmentId(environment.environmentId)}
+                    >
+                      <Icon className="size-3.5 shrink-0" aria-hidden />
+                      <span className="max-w-40 truncate">{environment.label}</span>
+                      <ConnectionStatusDot
+                        dotClassName={connectionPhaseDotClassName(environment.connection.phase)}
+                        pingClassName={connectionPhasePingClassName(environment.connection.phase)}
+                      />
+                      <span className="sr-only">{statusText}</span>
+                    </button>
+                  }
+                />
+                <TooltipPopup side="top">{statusText}</TooltipPopup>
+              </Tooltip>
+            );
+          })}
+        </div>
+      </ScrollArea>
     ) : null;
 
   return (
