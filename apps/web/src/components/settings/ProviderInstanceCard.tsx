@@ -727,65 +727,64 @@ export function ProviderInstanceCard({
       </div>
 
       <div className="px-4 py-5">
-        {visibleTab === "configuration" ? (
-          <div className="space-y-5">
-            <div>
-              <label htmlFor={`provider-instance-${instanceId}-display-name`} className="block">
-                <span className="text-xs font-medium text-foreground">Display name</span>
-                <DraftInput
-                  id={`provider-instance-${instanceId}-display-name`}
-                  className="mt-1.5"
-                  value={instance.displayName ?? ""}
-                  onCommit={updateDisplayName}
-                  placeholder={driverOption?.label ?? "Instance label"}
-                  spellCheck={false}
-                />
-                <span className="mt-1 block text-xs text-muted-foreground">
-                  Optional label shown in the provider list.
-                </span>
-              </label>
-            </div>
-
-            <div>
-              <ProviderAccentColorPicker
-                displayName={displayName}
-                value={accentColor}
-                onCommit={updateAccentColor}
-                commitDelayMs={120}
-                description="Used to distinguish this instance in picker rails and model lists."
-              />
-            </div>
-
-            <div>
-              <ProviderEnvironmentSection
-                environment={instance.environment ?? []}
-                onChange={updateEnvironment}
-              />
-            </div>
-
-            {driverOption ? (
-              <ProviderSettingsForm
-                definition={driverOption}
-                value={instance.config}
-                idPrefix={`provider-instance-${instanceId}`}
-                variant="card"
-                onChange={updateConfig}
-              />
-            ) : null}
-
-            {driverOption === undefined ? (
-              <div>
-                <p className="text-xs text-muted-foreground">
-                  This instance uses a driver (
-                  <code className="text-foreground">{String(instance.driver)}</code>) that is not
-                  shipped with the current build. Configuration values are preserved but cannot be
-                  edited from this surface.
-                </p>
-              </div>
-            ) : null}
-          </div>
-        ) : driverOption !== undefined ? (
+        <div className="space-y-5" hidden={visibleTab !== "configuration"}>
           <div>
+            <label htmlFor={`provider-instance-${instanceId}-display-name`} className="block">
+              <span className="text-xs font-medium text-foreground">Display name</span>
+              <DraftInput
+                id={`provider-instance-${instanceId}-display-name`}
+                className="mt-1.5"
+                value={instance.displayName ?? ""}
+                onCommit={updateDisplayName}
+                placeholder={driverOption?.label ?? "Instance label"}
+                spellCheck={false}
+              />
+              <span className="mt-1 block text-xs text-muted-foreground">
+                Optional label shown in the provider list.
+              </span>
+            </label>
+          </div>
+
+          <div>
+            <ProviderAccentColorPicker
+              displayName={displayName}
+              value={accentColor}
+              onCommit={updateAccentColor}
+              commitDelayMs={120}
+              description="Used to distinguish this instance in picker rails and model lists."
+            />
+          </div>
+
+          <div>
+            <ProviderEnvironmentSection
+              environment={instance.environment ?? []}
+              onChange={updateEnvironment}
+            />
+          </div>
+
+          {driverOption ? (
+            <ProviderSettingsForm
+              definition={driverOption}
+              value={instance.config}
+              idPrefix={`provider-instance-${instanceId}`}
+              variant="card"
+              onChange={updateConfig}
+            />
+          ) : null}
+
+          {driverOption === undefined ? (
+            <div>
+              <p className="text-xs text-muted-foreground">
+                This instance uses a driver (
+                <code className="text-foreground">{String(instance.driver)}</code>) that is not
+                shipped with the current build. Configuration values are preserved but cannot be
+                edited from this surface.
+              </p>
+            </div>
+          ) : null}
+        </div>
+        {driverOption !== undefined ? (
+          <div hidden={visibleTab !== "models"}>
             <ProviderModelsSection
               instanceId={instanceId}
               driverKind={driverKind}
