@@ -182,9 +182,20 @@ if [[ "$launch_enabled" = false ]]; then
   exit 0
 fi
 
+printf 'Waiting for Windows to finish installer cleanup...\n'
+sleep 2
+launch_started_epoch=$(date -u +%s)
 pwsh.exe -NoProfile -ExecutionPolicy Bypass \
   -File "$manager_script_windows" \
   -Action Launch
+
+sleep 2
+launch_status=$(pwsh.exe -NoProfile -ExecutionPolicy Bypass \
+  -File "$manager_script_windows" \
+  -Action Status)
+launch_process_count=$(jq -r '.processes | length' <<<"$launch_status")
+[[ "$launch_process_count" -gt 0 ]] ||
+  fail "T3 Code exited immediately after launch; try launching it manually and inspect the desktop logs"
 
 if [[ "$verify_enabled" = false ]]; then
   printf 'Installation and launch completed; health verification was skipped.\n'
@@ -194,8 +205,12 @@ fi
 health_payload=""
 for _ in $(seq 1 90); do
   if [[ -f "$runtime_state" ]]; then
+    candidate_pid=$(jq -r '.pid // empty' "$runtime_state" 2>/dev/null || true)
     origin=$(jq -r '.origin // empty' "$runtime_state" 2>/dev/null || true)
-    if [[ -n "$origin" ]]; then
+    started_at=$(jq -r '.startedAt // empty' "$runtime_state" 2>/dev/null || true)
+    started_epoch=$(date -d "$started_at" +%s 2>/dev/null || printf '0')
+    if [[ -n "$candidate_pid" && -d "/proc/$candidate_pid" && -n "$origin" &&
+      "$started_epoch" -ge "$launch_started_epoch" ]]; then
       health_payload=$(curl -fsS --max-time 2 "$origin/.well-known/t3/environment" 2>/dev/null || true)
       if [[ -n "$health_payload" ]]; then
         break
