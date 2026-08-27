@@ -37,6 +37,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { DriverOption } from "./providerDriverMeta";
+import { providerSettingsTabClassName } from "./providerSettingsTabs";
 import { ProviderSettingsForm } from "./ProviderSettingsForm";
 import { ProviderModelsSection } from "./ProviderModelsSection";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
@@ -699,17 +700,12 @@ export function ProviderInstanceCard({
         </div>
       </div>
 
-      <div className="flex h-11 gap-6 border-b border-border/70 px-4">
+      <div className="flex h-11 border-b border-border/70 px-1">
         {driverOption !== undefined ? (
           <button
             type="button"
             aria-pressed={visibleTab === "models"}
-            className={cn(
-              "relative flex h-11 cursor-pointer items-center rounded-sm px-0 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-              visibleTab === "models"
-                ? "text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-primary"
-                : "text-muted-foreground hover:text-foreground",
-            )}
+            className={providerSettingsTabClassName(visibleTab === "models")}
             onClick={() => setActiveTab("models")}
           >
             Models
@@ -718,12 +714,7 @@ export function ProviderInstanceCard({
         <button
           type="button"
           aria-pressed={visibleTab === "configuration"}
-          className={cn(
-            "relative flex h-11 cursor-pointer items-center rounded-sm px-0 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-            visibleTab === "configuration"
-              ? "text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-primary"
-              : "text-muted-foreground hover:text-foreground",
-          )}
+          className={providerSettingsTabClassName(visibleTab === "configuration")}
           onClick={() => setActiveTab("configuration")}
         >
           Configuration

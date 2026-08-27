@@ -77,6 +77,7 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
 import { DRIVER_OPTIONS, getDriverOption } from "./providerDriverMeta";
+import { providerSettingsTabClassName } from "./providerSettingsTabs";
 import { searchableSetting } from "./settingsSearch";
 import {
   backgroundActivityOverrideSettings,
@@ -223,7 +224,7 @@ export function ProviderSettingsPanel() {
         <div
           role="group"
           aria-label="Devices"
-          className="flex h-full w-max min-w-full border-b border-border/70 px-3"
+          className="flex h-full w-max min-w-full border-b border-border/70 px-3 sm:px-4"
         >
           {options.map((environment) => {
             const Icon = providerEnvironmentIcon(environment);
@@ -237,12 +238,7 @@ export function ProviderSettingsPanel() {
                     <button
                       type="button"
                       aria-pressed={selected}
-                      className={cn(
-                        "relative flex h-full shrink-0 cursor-pointer items-center gap-2 rounded-sm px-3 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-                        selected
-                          ? "text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-primary"
-                          : "text-muted-foreground hover:text-foreground",
-                      )}
+                      className={cn(providerSettingsTabClassName(selected), "gap-2 text-left")}
                       onClick={() => setSelectedEnvironmentId(environment.environmentId)}
                     >
                       <Icon className="size-3.5 shrink-0" aria-hidden />
