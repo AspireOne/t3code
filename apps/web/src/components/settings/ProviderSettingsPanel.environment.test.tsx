@@ -225,8 +225,17 @@ describe("EnvironmentProviderSettings routing", () => {
       },
       favorites: [{ provider: customId, model: "favorite" }],
     };
-    const panel = renderPanel();
-    const customCard = visitElements(panel, (element) => element.props.instanceId === customId);
+    let panel = renderPanel();
+    const customRow = visitElements(
+      panel,
+      (element) => element.props.instanceId === customId && element.props.mode === "list",
+    );
+    (customRow?.props.onSelect as (() => void) | undefined)?.();
+    panel = renderPanel();
+    const customCard = visitElements(
+      panel,
+      (element) => element.props.instanceId === customId && element.props.mode === "editor",
+    );
     expect(customCard).not.toBeNull();
     (customCard?.props.onDelete as (() => void) | undefined)?.();
 
@@ -237,7 +246,16 @@ describe("EnvironmentProviderSettings routing", () => {
     });
 
     settingsState.updateSettings.mockClear();
-    const defaultCard = visitElements(panel, (element) => element.props.instanceId === codexId);
+    const defaultRow = visitElements(
+      panel,
+      (element) => element.props.instanceId === codexId && element.props.mode === "list",
+    );
+    (defaultRow?.props.onSelect as (() => void) | undefined)?.();
+    panel = renderPanel();
+    const defaultCard = visitElements(
+      panel,
+      (element) => element.props.instanceId === codexId && element.props.mode === "editor",
+    );
     const resetAction = defaultCard?.props.headerAction;
     const resetButton = visitElements(
       resetAction,
