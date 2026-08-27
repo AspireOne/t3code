@@ -369,11 +369,11 @@ export function ProviderInstanceCard({
 }: ProviderInstanceCardProps) {
   const [activeTab, setActiveTab] = useState<"models" | "configuration">("configuration");
   const enabled = resolveProviderInstanceEnabled(instance);
-  // The server-reported status wins when present; otherwise fall back to
-  // "disabled"/"warning" based on the local `enabled` flag so the dot
-  // reflects the persisted intent even before the first probe completes.
-  const statusKey: ProviderStatusKey =
-    (liveProvider?.status as ProviderStatusKey | undefined) ?? (enabled ? "warning" : "disabled");
+  // A locally disabled provider stays neutral even if its last server status
+  // is stale. Enabled providers use the server status when one is available.
+  const statusKey: ProviderStatusKey = enabled
+    ? ((liveProvider?.status as ProviderStatusKey | undefined) ?? "warning")
+    : "disabled";
   const statusStyle = PROVIDER_STATUS_STYLES[statusKey];
   const rawSummary = getProviderSummary(liveProvider);
   const summary = rawSummary;
@@ -410,6 +410,7 @@ export function ProviderInstanceCard({
   const driverKind: ProviderDriverKind | null = isProviderDriverKind(instance.driver)
     ? instance.driver
     : null;
+  const visibleTab = driverOption === undefined ? "configuration" : activeTab;
 
   const customModels = readConfigStringArray(instance.config, "customModels");
   // Server-returned models may lag behind settings writes. Treat probe
@@ -551,7 +552,10 @@ export function ProviderInstanceCard({
         {selected ? <span className="absolute inset-y-0 left-0 w-0.5 bg-primary" /> : null}
         <button
           type="button"
-          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+          className={cn(
+            "flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-sm text-left outline-none transition-opacity focus-visible:ring-2 focus-visible:ring-ring",
+            !enabled && !selected && "opacity-60 group-hover:opacity-100",
+          )}
           onClick={onSelect}
           aria-pressed={selected}
         >
@@ -688,28 +692,28 @@ export function ProviderInstanceCard({
         </div>
       </div>
 
-      <div className="flex h-11 items-end gap-6 border-b border-border/70 px-4" role="tablist">
+      <div className="flex h-11 items-end gap-6 border-b border-border/70 px-4">
+        {driverOption !== undefined ? (
+          <button
+            type="button"
+            aria-pressed={visibleTab === "models"}
+            className={cn(
+              "h-11 cursor-pointer rounded-sm border-b-2 px-0 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+              visibleTab === "models"
+                ? "border-primary text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground",
+            )}
+            onClick={() => setActiveTab("models")}
+          >
+            Models
+          </button>
+        ) : null}
         <button
           type="button"
-          role="tab"
-          aria-selected={activeTab === "models"}
+          aria-pressed={visibleTab === "configuration"}
           className={cn(
-            "h-11 border-b-2 px-0 text-xs font-medium transition-colors",
-            activeTab === "models"
-              ? "border-primary text-foreground"
-              : "border-transparent text-muted-foreground hover:text-foreground",
-          )}
-          onClick={() => setActiveTab("models")}
-        >
-          Models
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === "configuration"}
-          className={cn(
-            "h-11 border-b-2 px-0 text-xs font-medium transition-colors",
-            activeTab === "configuration"
+            "h-11 cursor-pointer rounded-sm border-b-2 px-0 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+            visibleTab === "configuration"
               ? "border-primary text-foreground"
               : "border-transparent text-muted-foreground hover:text-foreground",
           )}
@@ -720,8 +724,8 @@ export function ProviderInstanceCard({
       </div>
 
       <div className="px-4 py-5">
-        {activeTab === "configuration" ? (
-          <div className="space-y-5" role="tabpanel">
+        {visibleTab === "configuration" ? (
+          <div className="space-y-5">
             <div>
               <label htmlFor={`provider-instance-${instanceId}-display-name`} className="block">
                 <span className="text-xs font-medium text-foreground">Display name</span>
@@ -778,7 +782,7 @@ export function ProviderInstanceCard({
             ) : null}
           </div>
         ) : driverOption !== undefined ? (
-          <div role="tabpanel">
+          <div>
             <ProviderModelsSection
               instanceId={instanceId}
               driverKind={driverKind}

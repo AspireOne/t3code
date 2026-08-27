@@ -63,6 +63,7 @@ import {
   type ProviderUpdateCandidate,
 } from "../ProviderUpdateLaunchNotification.logic";
 import { Button } from "../ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible";
 import {
   NumberField,
   NumberFieldDecrement,
@@ -208,7 +209,7 @@ export function ProviderSettingsPanel() {
     options.length === 1 && options[0]?.entry.target._tag === "PrimaryConnectionTarget";
   const deviceTabs =
     !onlyPrimaryDevice && options.length > 0 ? (
-      <div className="flex min-w-0 overflow-x-auto border-b border-border/70 px-3" role="tablist">
+      <div className="flex min-w-0 overflow-x-auto border-b border-border/70 px-3">
         {options.map((environment) => {
           const Icon = providerEnvironmentIcon(environment);
           const selected = environment.environmentId === effectiveEnvironmentId;
@@ -217,10 +218,9 @@ export function ProviderSettingsPanel() {
             <button
               key={environment.environmentId}
               type="button"
-              role="tab"
-              aria-selected={selected}
+              aria-pressed={selected}
               className={cn(
-                "relative flex h-11 shrink-0 items-center gap-2 px-3 text-left text-xs transition-colors",
+                "relative flex h-11 shrink-0 cursor-pointer items-center gap-2 rounded-sm px-3 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
                 selected
                   ? "text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-primary"
                   : "text-muted-foreground hover:text-foreground",
@@ -796,7 +796,7 @@ export function EnvironmentProviderSettings({
             <Button
               size="sm"
               variant="outline"
-              className="h-8 gap-1.5 px-2.5 text-xs"
+              className="text-xs"
               onClick={() => setIsAddInstanceDialogOpen(true)}
             >
               <PlusIcon className="size-3.5" />
@@ -856,19 +856,18 @@ export function EnvironmentProviderSettings({
             </div>
           </div>
 
-          <div className="mt-2 border-t border-border/70">
-            <button
-              type="button"
-              className="flex h-10 w-full items-center gap-2 px-3 text-xs text-muted-foreground hover:text-foreground"
-              onClick={() => setAdvancedOpen((open) => !open)}
-              aria-expanded={advancedOpen}
-            >
+          <Collapsible
+            open={advancedOpen}
+            onOpenChange={setAdvancedOpen}
+            className="mt-2 border-t border-border/70"
+          >
+            <CollapsibleTrigger className="flex h-10 w-full items-center gap-2 px-3 text-xs text-muted-foreground hover:text-foreground">
               <ChevronDownIcon
                 className={cn("size-3 transition-transform", advancedOpen && "rotate-180")}
               />
               Advanced
-            </button>
-            {advancedOpen ? (
+            </CollapsibleTrigger>
+            <CollapsibleContent>
               <SettingsRow
                 title={
                   <span className="inline-flex items-center gap-1.5">
@@ -930,8 +929,8 @@ export function EnvironmentProviderSettings({
                   </div>
                 }
               />
-            ) : null}
-          </div>
+            </CollapsibleContent>
+          </Collapsible>
         </div>
       </SettingsSection>
 
