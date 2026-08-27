@@ -377,6 +377,7 @@ export function ProviderInstanceCard({
   const statusStyle = PROVIDER_STATUS_STYLES[statusKey];
   const rawSummary = getProviderSummary(liveProvider);
   const summary = enabled ? rawSummary : { headline: "Disabled", detail: null };
+  const showEditorStatus = enabled && (statusKey === "warning" || statusKey === "error");
   const versionLabel = getProviderVersionLabel(liveProvider?.version);
   const versionAdvisory = getProviderVersionAdvisoryPresentation(liveProvider?.versionAdvisory);
   const updateCommand = versionAdvisory?.updateCommand ?? null;
@@ -689,19 +690,25 @@ export function ProviderInstanceCard({
             ) : null}
             {titleTailNode}
           </div>
+          {showEditorStatus ? (
+            <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
+              <span>{summary.headline}</span>
+              {summary.detail ? <span>· {summary.detail}</span> : null}
+            </p>
+          ) : null}
         </div>
       </div>
 
-      <div className="flex h-11 items-end gap-6 border-b border-border/70 px-4">
+      <div className="flex h-11 gap-6 border-b border-border/70 px-4">
         {driverOption !== undefined ? (
           <button
             type="button"
             aria-pressed={visibleTab === "models"}
             className={cn(
-              "h-11 cursor-pointer rounded-sm border-b-2 px-0 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+              "relative flex h-11 cursor-pointer items-center rounded-sm px-0 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
               visibleTab === "models"
-                ? "border-primary text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground",
+                ? "text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-primary"
+                : "text-muted-foreground hover:text-foreground",
             )}
             onClick={() => setActiveTab("models")}
           >
@@ -712,10 +719,10 @@ export function ProviderInstanceCard({
           type="button"
           aria-pressed={visibleTab === "configuration"}
           className={cn(
-            "h-11 cursor-pointer rounded-sm border-b-2 px-0 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+            "relative flex h-11 cursor-pointer items-center rounded-sm px-0 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
             visibleTab === "configuration"
-              ? "border-primary text-foreground"
-              : "border-transparent text-muted-foreground hover:text-foreground",
+              ? "text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-primary"
+              : "text-muted-foreground hover:text-foreground",
           )}
           onClick={() => setActiveTab("configuration")}
         >

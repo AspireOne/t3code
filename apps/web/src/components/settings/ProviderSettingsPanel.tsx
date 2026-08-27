@@ -71,6 +71,7 @@ import {
   NumberFieldIncrement,
   NumberFieldInput,
 } from "../ui/number-field";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
@@ -215,26 +216,32 @@ export function ProviderSettingsPanel() {
           const selected = environment.environmentId === effectiveEnvironmentId;
           const statusText = connectionStatusText(environment.connection);
           return (
-            <button
-              key={environment.environmentId}
-              type="button"
-              aria-pressed={selected}
-              className={cn(
-                "relative flex h-11 shrink-0 cursor-pointer items-center gap-2 rounded-sm px-3 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-                selected
-                  ? "text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-primary"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-              onClick={() => setSelectedEnvironmentId(environment.environmentId)}
-            >
-              <Icon className="size-3.5 shrink-0" aria-hidden />
-              <span className="max-w-40 truncate">{environment.label}</span>
-              <ConnectionStatusDot
-                dotClassName={connectionPhaseDotClassName(environment.connection.phase)}
-                pingClassName={connectionPhasePingClassName(environment.connection.phase)}
+            <Tooltip key={environment.environmentId}>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-pressed={selected}
+                    className={cn(
+                      "relative flex h-11 shrink-0 cursor-pointer items-center gap-2 rounded-sm px-3 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                      selected
+                        ? "text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-primary"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                    onClick={() => setSelectedEnvironmentId(environment.environmentId)}
+                  >
+                    <Icon className="size-3.5 shrink-0" aria-hidden />
+                    <span className="max-w-40 truncate">{environment.label}</span>
+                    <ConnectionStatusDot
+                      dotClassName={connectionPhaseDotClassName(environment.connection.phase)}
+                      pingClassName={connectionPhasePingClassName(environment.connection.phase)}
+                    />
+                    <span className="sr-only">{statusText}</span>
+                  </button>
+                }
               />
-              <span className="sr-only">{statusText}</span>
-            </button>
+              <TooltipPopup side="top">{statusText}</TooltipPopup>
+            </Tooltip>
           );
         })}
       </div>
@@ -830,19 +837,26 @@ export function EnvironmentProviderSettings({
               <div className="flex min-h-10 items-center justify-between border-t border-border/70 px-3">
                 <ProviderLastChecked lastCheckedAt={lastCheckedAt} />
                 {!readOnly ? (
-                  <Button
-                    size="icon-micro"
-                    variant="ghost-muted"
-                    disabled={isRefreshingProviders}
-                    onClick={() => void refreshProviders()}
-                    aria-label="Refresh provider status"
-                  >
-                    {isRefreshingProviders ? (
-                      <LoaderIcon className="size-3 animate-spin" />
-                    ) : (
-                      <RefreshCwIcon className="size-3" />
-                    )}
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <Button
+                          size="icon-micro"
+                          variant="ghost-muted"
+                          disabled={isRefreshingProviders}
+                          onClick={() => void refreshProviders()}
+                          aria-label="Refresh provider status"
+                        >
+                          {isRefreshingProviders ? (
+                            <LoaderIcon className="size-3 animate-spin" />
+                          ) : (
+                            <RefreshCwIcon className="size-3" />
+                          )}
+                        </Button>
+                      }
+                    />
+                    <TooltipPopup side="top">Refresh provider status</TooltipPopup>
+                  </Tooltip>
                 ) : null}
               </div>
             </div>
