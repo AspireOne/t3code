@@ -11,6 +11,7 @@ import {
   resolveEnvModeLabel,
   resolveBranchTriggerLabel,
   resolveBranchToolbarPrBranch,
+  resolveBranchToolbarGitStatus,
   resolveBranchToolbarValue,
   resolveLockedWorkspaceLabel,
   resolveLocalCheckoutBranchMismatch,
@@ -24,6 +25,44 @@ import {
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
 const remoteEnvironmentId = EnvironmentId.make("environment-remote");
+
+describe("resolveBranchToolbarGitStatus", () => {
+  it("orders non-zero local counts before upstream divergence", () => {
+    expect(
+      resolveBranchToolbarGitStatus({
+        changeCounts: {
+          conflicted: 1,
+          staged: 2,
+          unstaged: 1,
+          deleted: 1,
+          renamed: 2,
+          untracked: 3,
+        },
+        hasUpstream: true,
+        aheadCount: 2,
+        behindCount: 1,
+      }).map(({ symbol, count }) => `${symbol}${count}`),
+    ).toEqual(["!1", "+2", "~1", "×1", "»2", "?3", "⇡2", "⇣1"]);
+  });
+
+  it("omits zero counts and divergence without an upstream", () => {
+    expect(
+      resolveBranchToolbarGitStatus({
+        changeCounts: {
+          conflicted: 0,
+          staged: 0,
+          unstaged: 0,
+          deleted: 0,
+          renamed: 0,
+          untracked: 0,
+        },
+        hasUpstream: false,
+        aheadCount: 4,
+        behindCount: 2,
+      }),
+    ).toEqual([]);
+  });
+});
 
 describe("resolvePreviousWorktreeSeed", () => {
   it("picks the most recently updated worktree thread", () => {

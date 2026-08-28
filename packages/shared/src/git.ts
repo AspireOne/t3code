@@ -255,6 +255,7 @@ function toLocalStatusPart(status: VcsStatusResult): VcsStatusLocalResult {
     isDefaultRef: status.isDefaultRef,
     refName: status.refName,
     hasWorkingTreeChanges: status.hasWorkingTreeChanges,
+    ...(status.changeCounts ? { changeCounts: status.changeCounts } : {}),
     workingTree: status.workingTree,
   };
 }
@@ -277,6 +278,14 @@ export function applyGitStatusStreamEvent(
             isDefaultRef: false,
             refName: null,
             hasWorkingTreeChanges: false,
+            changeCounts: {
+              conflicted: 0,
+              staged: 0,
+              unstaged: 0,
+              deleted: 0,
+              renamed: 0,
+              untracked: 0,
+            },
             workingTree: { files: [], insertions: 0, deletions: 0 },
           },
           event.remote,

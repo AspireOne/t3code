@@ -1011,6 +1011,72 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("counts staged, unstaged, and untracked status entries", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        yield* writeTextFile(cwd, "tracked.ts", "export const value = 1;\n");
+        yield* writeTextFile(cwd, "deleted.ts", "delete me\n");
+        yield* writeTextFile(cwd, "renamed.ts", "rename me\n");
+        yield* git(cwd, ["add", "tracked.ts", "deleted.ts", "renamed.ts"]);
+        yield* git(cwd, ["commit", "-m", "add tracked files"]);
+
+        yield* writeTextFile(cwd, "tracked.ts", "export const value = 2;\n");
+        yield* git(cwd, ["add", "tracked.ts"]);
+        yield* writeTextFile(cwd, "tracked.ts", "export const value = 3;\n");
+        yield* writeTextFile(cwd, "README.md", "# changed\n");
+        yield* git(cwd, ["rm", "deleted.ts"]);
+        yield* git(cwd, ["reset", "HEAD", "deleted.ts"]);
+        yield* git(cwd, ["mv", "renamed.ts", "renamed-next.ts"]);
+        yield* writeTextFile(cwd, "untracked.txt", "new\n");
+
+        const status = yield* (yield* GitVcsDriver.GitVcsDriver).statusDetails(cwd);
+
+        assert.deepStrictEqual(status.changeCounts, {
+          conflicted: 0,
+          staged: 2,
+          unstaged: 3,
+          deleted: 1,
+          renamed: 1,
+          untracked: 1,
+        });
+      }),
+    );
+
+    it.effect("counts unresolved paths only as conflicts", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        yield* git(cwd, ["checkout", "-b", "conflicting-branch"]);
+        yield* writeTextFile(cwd, "README.md", "branch version\n");
+        yield* git(cwd, ["add", "README.md"]);
+        yield* git(cwd, ["commit", "-m", "change on branch"]);
+        yield* git(cwd, ["checkout", initialBranch]);
+        yield* writeTextFile(cwd, "README.md", "main version\n");
+        yield* git(cwd, ["add", "README.md"]);
+        yield* git(cwd, ["commit", "-m", "change on main"]);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const merge = yield* driver.execute({
+          operation: "GitVcsDriver.test.conflictingMerge",
+          cwd,
+          args: ["merge", "conflicting-branch"],
+          allowNonZeroExit: true,
+        });
+        assert.notEqual(merge.exitCode, 0);
+
+        const status = yield* driver.statusDetails(cwd);
+
+        assert.deepStrictEqual(status.changeCounts, {
+          conflicted: 1,
+          staged: 0,
+          unstaged: 0,
+          deleted: 0,
+          renamed: 0,
+          untracked: 0,
+        });
+      }),
+    );
+
     it.effect("reports changes to a file named HEAD", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();

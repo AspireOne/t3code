@@ -214,6 +214,16 @@ const VcsStatusLocalShape = {
   isDefaultRef: Schema.Boolean,
   refName: Schema.NullOr(TrimmedNonEmptyStringSchema),
   hasWorkingTreeChanges: Schema.Boolean,
+  changeCounts: Schema.optional(
+    Schema.Struct({
+      conflicted: NonNegativeInt,
+      staged: NonNegativeInt,
+      unstaged: NonNegativeInt,
+      deleted: NonNegativeInt,
+      renamed: NonNegativeInt,
+      untracked: NonNegativeInt,
+    }),
+  ),
   workingTree: Schema.Struct({
     files: Schema.Array(
       Schema.Struct({

@@ -85,6 +85,14 @@ const NON_REPOSITORY_STATUS_DETAILS = Object.freeze<GitVcsDriver.GitStatusDetail
   branch: null,
   upstreamRef: null,
   hasWorkingTreeChanges: false,
+  changeCounts: {
+    conflicted: 0,
+    staged: 0,
+    unstaged: 0,
+    deleted: 0,
+    renamed: 0,
+    untracked: 0,
+  },
   workingTree: { files: [], insertions: 0, deletions: 0 },
   hasUpstream: false,
   aheadCount: 0,
@@ -1691,6 +1699,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     let behindCount = 0;
     let aheadOfDefaultCount = 0;
     let hasWorkingTreeChanges = false;
+    const changeCounts = {
+      conflicted: 0,
+      staged: 0,
+      unstaged: 0,
+      deleted: 0,
+      renamed: 0,
+      untracked: 0,
+    };
     const changedFilesWithoutNumstat = new Set<string>();
 
     for (const line of statusStdout.split(/\r?\n/g)) {
@@ -1713,6 +1729,29 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }
       if (line.trim().length > 0 && !line.startsWith("#")) {
         hasWorkingTreeChanges = true;
+        if (line.startsWith("u ")) {
+          changeCounts.conflicted += 1;
+        } else if (line.startsWith("? ")) {
+          changeCounts.untracked += 1;
+        } else if (line.startsWith("1 ") || line.startsWith("2 ")) {
+          const [, xy = "..", submodule = "N..."] = line.split(" ", 3);
+          const indexState = xy[0];
+          const worktreeState = xy[1];
+          if (indexState && indexState !== ".") {
+            changeCounts.staged += 1;
+          }
+          // Ignore dirtiness inside a submodule, but retain a changed gitlink.
+          const submoduleCommitChanged = submodule[0] !== "S" || submodule[1] === "C";
+          if (worktreeState && worktreeState !== "." && submoduleCommitChanged) {
+            changeCounts.unstaged += 1;
+          }
+          if (indexState === "D" || worktreeState === "D") {
+            changeCounts.deleted += 1;
+          }
+          if (indexState === "R" || worktreeState === "R") {
+            changeCounts.renamed += 1;
+          }
+        }
         const pathValue = parsePorcelainPath(line);
         if (pathValue) changedFilesWithoutNumstat.add(pathValue);
       }
@@ -1768,6 +1807,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       branch: refName,
       upstreamRef,
       hasWorkingTreeChanges,
+      changeCounts,
       workingTree: {
         files,
         insertions,
@@ -1821,6 +1861,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         isDefaultRef: details.isDefaultBranch,
         refName: details.branch,
         hasWorkingTreeChanges: details.hasWorkingTreeChanges,
+        changeCounts: details.changeCounts,
         workingTree: details.workingTree,
         hasUpstream: details.hasUpstream,
         aheadCount: details.aheadCount,

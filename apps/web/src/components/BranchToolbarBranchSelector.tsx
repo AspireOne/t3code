@@ -5,7 +5,13 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type { ContextMenuItem, EnvironmentId, VcsRef, ThreadId } from "@t3tools/contracts";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
-import { ChevronDownIcon, GitBranchIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  GitBranchIcon,
+  GitCompareArrowsIcon,
+  RefreshCwIcon,
+  SearchIcon,
+} from "lucide-react";
 import {
   useCallback,
   useDeferredValue,
@@ -39,6 +45,7 @@ import {
   resolveBranchTriggerLabel,
   resolveBranchToolbarPrBranch,
   resolveBranchSelectionTarget,
+  resolveBranchToolbarGitStatus,
   resolveBranchToolbarValue,
   resolveDraftEnvModeAfterBranchChange,
   resolveEffectiveEnvMode,
@@ -78,6 +85,7 @@ interface BranchToolbarBranchSelectorProps {
   startFromOrigin: boolean;
   onStartFromOriginChange: (startFromOrigin: boolean) => void;
   onCheckoutPullRequestRequest?: (reference: string) => void;
+  onWorkingTreeOpen?: () => void;
   onComposerFocusRequest?: () => void;
 }
 
@@ -97,6 +105,7 @@ export function BranchToolbarBranchSelector({
   startFromOrigin,
   onStartFromOriginChange,
   onCheckoutPullRequestRequest,
+  onWorkingTreeOpen,
   onComposerFocusRequest,
 }: BranchToolbarBranchSelectorProps) {
   const startFromOriginSwitchId = useId();
@@ -627,6 +636,18 @@ export function BranchToolbarBranchSelector({
     ? `Open ${sourceControlPresentation.terminology.singular} #${branchPr.number} (${branchPr.state})`
     : "";
   const openPrLink = useOpenPrLink(threadRef);
+  const gitStatusItems = isSelectingWorktreeBase
+    ? []
+    : resolveBranchToolbarGitStatus(branchStatusQuery.data ?? null);
+  const gitStatusLabel = gitStatusItems
+    .map((item) => {
+      const unit = item.kind === "ahead" || item.kind === "behind" ? "commit" : "file";
+      return `${item.count} ${item.label} ${unit}${item.count === 1 ? "" : "s"}`;
+    })
+    .join(", ");
+  const gitStatusTooltip = onWorkingTreeOpen
+    ? `Git status: ${gitStatusLabel}. Open Working tree.`
+    : `Git status: ${gitStatusLabel}. Refresh status.`;
 
   function renderPickerItem(itemValue: string, index: number) {
     if (checkoutPullRequestItemValue && itemValue === checkoutPullRequestItemValue) {
@@ -748,6 +769,49 @@ export function BranchToolbarBranchSelector({
               <span>#{branchPr.number}</span>
             </TooltipTrigger>
             <TooltipPopup side="top">{branchPrTooltip}</TooltipPopup>
+          </Tooltip>
+        ) : null}
+        {gitStatusItems.length > 0 ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label={gitStatusTooltip}
+                  onClick={() => {
+                    branchStatusQuery.refresh();
+                    onWorkingTreeOpen?.();
+                  }}
+                  className="inline-flex h-6 shrink-0 items-center rounded px-1 text-[11px] font-medium tabular-nums text-muted-foreground/70 transition-colors hover:bg-muted/60 hover:text-foreground/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              }
+            >
+              <span
+                data-composer-label
+                className="min-w-0 group-data-[compact]/composer-context:max-w-0"
+              >
+                <span
+                  data-composer-label-motion
+                  aria-hidden="true"
+                  className="flex origin-left items-center gap-1 transition-[opacity,transform] duration-180 ease-[cubic-bezier(0.32,0.72,0,1)] group-data-[compact]/composer-context:[transform:translateX(-0.25rem)_scaleX(0.95)] group-data-[compact]/composer-context:opacity-0 motion-reduce:transform-none motion-reduce:transition-opacity"
+                >
+                  {gitStatusItems.map((item) => (
+                    <span
+                      key={item.kind}
+                      className={cn(item.kind === "conflicted" && "text-destructive")}
+                    >
+                      {item.symbol}
+                      {item.count}
+                    </span>
+                  ))}
+                </span>
+              </span>
+              <GitCompareArrowsIcon
+                aria-hidden="true"
+                className="hidden size-3 opacity-70 group-data-[compact]/composer-context:block"
+              />
+            </TooltipTrigger>
+            <TooltipPopup side="top">{gitStatusTooltip}</TooltipPopup>
           </Tooltip>
         ) : null}
         {/* Context menu lives on the wrapper: the disabled Button has

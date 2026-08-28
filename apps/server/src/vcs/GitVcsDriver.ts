@@ -63,6 +63,7 @@ export interface GitStatusDetails {
   branch: string | null;
   upstreamRef: string | null;
   hasWorkingTreeChanges: boolean;
+  changeCounts: NonNullable<VcsStatusResult["changeCounts"]>;
   workingTree: VcsStatusResult["workingTree"];
   hasUpstream: boolean;
   aheadCount: number;

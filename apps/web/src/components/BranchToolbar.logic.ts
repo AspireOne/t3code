@@ -1,4 +1,4 @@
-import type { EnvironmentId, VcsRef, ProjectId } from "@t3tools/contracts";
+import type { EnvironmentId, VcsRef, ProjectId, VcsStatusResult } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { toSortableTimestamp } from "../lib/threadSort";
 export {
@@ -15,6 +15,52 @@ export interface EnvironmentOption {
 
 export const EnvMode = Schema.Literals(["local", "worktree"]);
 export type EnvMode = typeof EnvMode.Type;
+
+export interface BranchToolbarGitStatusItem {
+  kind:
+    | "conflicted"
+    | "staged"
+    | "unstaged"
+    | "deleted"
+    | "renamed"
+    | "untracked"
+    | "ahead"
+    | "behind";
+  symbol: string;
+  count: number;
+  label: string;
+}
+
+export function resolveBranchToolbarGitStatus(
+  status: Pick<
+    VcsStatusResult,
+    "changeCounts" | "hasUpstream" | "aheadCount" | "behindCount"
+  > | null,
+): readonly BranchToolbarGitStatusItem[] {
+  if (!status) return [];
+  const counts = status.changeCounts;
+  const candidates: readonly BranchToolbarGitStatusItem[] = [
+    { kind: "conflicted", symbol: "!", count: counts?.conflicted ?? 0, label: "conflicted" },
+    { kind: "staged", symbol: "+", count: counts?.staged ?? 0, label: "staged" },
+    { kind: "unstaged", symbol: "~", count: counts?.unstaged ?? 0, label: "modified" },
+    { kind: "deleted", symbol: "×", count: counts?.deleted ?? 0, label: "deleted" },
+    { kind: "renamed", symbol: "»", count: counts?.renamed ?? 0, label: "renamed" },
+    { kind: "untracked", symbol: "?", count: counts?.untracked ?? 0, label: "untracked" },
+    {
+      kind: "ahead",
+      symbol: "⇡",
+      count: status.hasUpstream ? status.aheadCount : 0,
+      label: "ahead",
+    },
+    {
+      kind: "behind",
+      symbol: "⇣",
+      count: status.hasUpstream ? status.behindCount : 0,
+      label: "behind",
+    },
+  ];
+  return candidates.filter((item) => item.count > 0);
+}
 
 const GENERIC_LOCAL_ENVIRONMENT_LABELS = new Set(["local", "local environment"]);
 
