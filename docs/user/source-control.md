@@ -44,6 +44,9 @@ T3 Code works with the platforms your team already uses:
 - Open the review directly in your browser with one click
 - Command-click (Control-click on Windows and Linux) a pull request number in the sidebar to open it in your browser instead of in T3 Code
 - Check out a teammate's branch to review code locally
+- Use the diff toolbar's **Review focus** menu to defer test or generated files while keeping
+  source changes, active conversations, and explicitly opened files in view. Deferred files remain
+  available from summary rows at the end of the diff.
 
 **Fix what you wrote, in place**
 

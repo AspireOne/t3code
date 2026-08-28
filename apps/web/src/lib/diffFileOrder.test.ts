@@ -1,7 +1,7 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { describe, expect, it } from "vite-plus/test";
 
-import { diffFileTier, orderDiffFiles } from "./pullRequestFileOrder.logic";
+import { diffFileTier, orderDiffFiles } from "./diffFileOrder";
 
 /** Only the path and the patch's own lines matter here; the viewer fills the rest in. */
 function file(name: string, additionLines: ReadonlyArray<string> = []): FileDiffMetadata {

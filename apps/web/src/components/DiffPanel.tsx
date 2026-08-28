@@ -23,11 +23,12 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useOpenInPreferredEditor } from "../editorPreferences";
-import { type DraftId } from "../composerDraftStore";
+import { type DraftId, useComposerDraftStore } from "../composerDraftStore";
 import { openDiffFilePrimaryAction } from "../diffFileActions";
 import { useCheckpointDiff } from "~/lib/checkpointDiffState";
 import { cn } from "~/lib/utils";
 import { selectThreadDiffPanelSelection, useDiffPanelStore } from "../diffPanelStore";
+import { useDiffFocusStore } from "../diffFocusStore";
 import { useTheme } from "../hooks/useTheme";
 import {
   buildFileDiffRenderKey,
@@ -38,6 +39,7 @@ import {
   resolveFileDiffPath,
 } from "../lib/diffRendering";
 import { areAllDiffFilesCollapsed, toggleAllDiffFiles } from "../lib/diffCollapse";
+import { focusDiffFiles, type DiffFocusableTier } from "../lib/diffFileFocus";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { useProject, useThread } from "../state/entities";
 import { resolveThreadRouteRef } from "../threadRoutes";
@@ -46,6 +48,7 @@ import { formatShortTimestamp } from "../timestampFormat";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { DiffStatLabel } from "./chat/DiffStatLabel";
 import { AnnotatableCodeView, type AnnotatableCodeViewHandle } from "./diffs/AnnotatableCodeView";
+import { DeferredDiffFiles, DiffFocusMenu } from "./diffs/DiffFocusControls";
 import { Button } from "./ui/button";
 import { ToggleGroup, Toggle } from "./ui/toggle-group";
 import { Switch } from "./ui/switch";
@@ -78,6 +81,10 @@ import { createGitDiffFileContentsLoader } from "../lib/diffFileContents";
 
 type DiffThemeType = "light" | "dark";
 const AUTOMATIC_BASE_REF = "__automatic_base_ref__";
+const EMPTY_REVIEW_COMMENTS: ReadonlyArray<{
+  readonly sectionId: string;
+  readonly filePath: string;
+}> = [];
 
 interface CollapsedDiffFilesState {
   readonly scopeKey: string | null;
@@ -104,6 +111,7 @@ export default function DiffPanel({
   const [initialGitScope] = useState(initialGitScopeProp);
   const diffRenderMode = useDiffPanelStore((state) => state.diffRenderMode);
   const setDiffRenderMode = useDiffPanelStore((state) => state.setDiffRenderMode);
+  const diffFocusPreferences = useDiffFocusStore((state) => state.preferences);
   const [wordWrap, setWordWrap] = useState(settings.wordWrap);
   const [diffIgnoreWhitespace, setDiffIgnoreWhitespace] = useState(settings.diffIgnoreWhitespace);
   const [baseRefQuery, setBaseRefQuery] = useState("");
@@ -112,6 +120,10 @@ export default function DiffPanel({
     fileKeys: EMPTY_COLLAPSED_DIFF_FILE_KEYS,
   }));
   const [codeViewRevision, setCodeViewRevision] = useState(0);
+  const [activeDraftFile, setActiveDraftFile] = useState<{
+    readonly scopeKey: string | null;
+    readonly filePath: string;
+  } | null>(null);
   const codeViewRef = useRef<AnnotatableCodeViewHandle>(null);
   const lastCompletedTurnRefreshRef = useRef<{
     readonly threadKey: string | null;
@@ -223,6 +235,9 @@ export default function DiffPanel({
     : selectedGitScope === "unstaged"
       ? "Working tree"
       : "Branch changes";
+  const composerReviewComments = useComposerDraftStore(
+    (state) => state.getComposerDraft(composerDraftTarget)?.reviewComments ?? EMPTY_REVIEW_COMMENTS,
+  );
   const selectedCheckpointRange = useMemo(
     () =>
       typeof selectedCheckpointTurnCount === "number"
@@ -388,13 +403,32 @@ export default function DiffPanel({
       }),
     );
   }, [renderablePatch]);
+  const alwaysVisibleDiffPaths = useMemo(() => {
+    const paths = new Set<string>();
+    if (selectedFilePath) paths.add(selectedFilePath);
+    if (activeDraftFile?.scopeKey === collapseScopeKey) paths.add(activeDraftFile.filePath);
+    for (const comment of composerReviewComments) {
+      if (comment.sectionId === reviewSectionId) paths.add(comment.filePath);
+    }
+    return paths;
+  }, [
+    activeDraftFile,
+    collapseScopeKey,
+    composerReviewComments,
+    reviewSectionId,
+    selectedFilePath,
+  ]);
+  const focusedDiff = useMemo(
+    () => focusDiffFiles(renderableFiles, diffFocusPreferences, alwaysVisibleDiffPaths),
+    [alwaysVisibleDiffPaths, diffFocusPreferences, renderableFiles],
+  );
   const renderableFileEntries = useMemo(
     () =>
-      renderableFiles.map((fileDiff) => ({
+      focusedDiff.visibleFiles.map((fileDiff) => ({
         fileDiff,
         fileKey: buildFileDiffRenderKey(fileDiff),
       })),
-    [renderableFiles],
+    [focusedDiff.visibleFiles],
   );
   const codeViewFiles = useMemo(
     () =>
@@ -475,6 +509,24 @@ export default function DiffPanel({
       };
     });
   }, [collapseScopeKey, diffFileKeys]);
+
+  const setDiffFileTierVisible = useCallback((tier: DiffFocusableTier, visible: boolean) => {
+    useDiffFocusStore.getState().setTierVisible(tier, visible);
+  }, []);
+  const renderDiffFooter = useCallback(
+    () => (
+      <DeferredDiffFiles
+        categories={focusedDiff.deferredCategories}
+        onShow={(tier) => setDiffFileTierVisible(tier, true)}
+      />
+    ),
+    [focusedDiff.deferredCategories, setDiffFileTierVisible],
+  );
+  const handleActiveDraftFilePathChange = useCallback(
+    (filePath: string | null) =>
+      setActiveDraftFile(filePath ? { scopeKey: collapseScopeKey, filePath } : null),
+    [collapseScopeKey],
+  );
 
   const selectTurn = (turnId: TurnId) => {
     if (!routeThreadRef) return;
@@ -691,7 +743,7 @@ export default function DiffPanel({
         )}
       </div>
       <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
-        {codeViewFiles.length > 0 && (
+        {renderableFiles.length > 0 && (
           <DiffStatLabel
             additions={diffLineStat.additions}
             deletions={diffLineStat.deletions}
@@ -721,6 +773,16 @@ export default function DiffPanel({
             </TooltipPopup>
           </Tooltip>
         )}
+        <DiffFocusMenu
+          preferences={diffFocusPreferences}
+          testFileCount={focusedDiff.fileCountByTier.test}
+          generatedFileCount={focusedDiff.fileCountByTier.generated}
+          deferredFileCount={focusedDiff.deferredCategories.reduce(
+            (count, category) => count + category.files.length,
+            0,
+          )}
+          onTierVisibilityChange={setDiffFileTierVisible}
+        />
         {codeViewFiles.length > 0 && (
           <Tooltip>
             <TooltipTrigger
@@ -898,6 +960,8 @@ export default function DiffPanel({
                   codeViewKey={codeViewMountKey}
                   className="h-full min-h-0 overflow-auto"
                   files={codeViewFiles}
+                  renderCodeViewFooter={renderDiffFooter}
+                  onActiveDraftFilePathChange={handleActiveDraftFilePathChange}
                   sectionId={reviewSectionId}
                   sectionTitle={reviewSectionTitle}
                   composerDraftTarget={composerDraftTarget}

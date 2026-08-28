@@ -1,5 +1,6 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import type { PullRequestDiffSide } from "@t3tools/contracts";
+import type { DiffFileTier } from "~/lib/diffFileOrder";
 
 /**
  * Whether a conversation's line is really in this file's hunks.
@@ -23,6 +24,13 @@ export function isLineInFileDiff(
 
 /** What the toolbar last asked of every file at once, null being the reader asking nothing yet. */
 export type DiffFoldOverride = "expanded" | "folded" | null;
+export type DiffFoldOverridesByTier = Readonly<Record<DiffFileTier, DiffFoldOverride>>;
+
+interface TieredDiffFoldFile {
+  readonly key: string;
+  readonly tier: DiffFileTier;
+  readonly visible: boolean;
+}
 
 /**
  * Whether a file is drawn folded.
@@ -41,4 +49,33 @@ export function isFileDiffCollapsed(
 ): boolean {
   const foldedByDefault = foldOverride !== "expanded";
   return toggledFileKeys.has(fileKey) ? !foldedByDefault : foldedByDefault;
+}
+
+export function applyVisibleDiffFoldOverride(input: {
+  readonly override: DiffFoldOverride;
+  readonly shownTiers: ReadonlySet<DiffFileTier>;
+  readonly files: ReadonlyArray<TieredDiffFoldFile>;
+  readonly overridesByTier: DiffFoldOverridesByTier;
+  readonly toggledFileKeys: ReadonlySet<string>;
+}): {
+  readonly overridesByTier: DiffFoldOverridesByTier;
+  readonly toggledFileKeys: ReadonlySet<string>;
+} {
+  const affectedTiers = new Set<DiffFileTier>(["source", ...input.shownTiers]);
+  const overridesByTier = { ...input.overridesByTier };
+  for (const tier of affectedTiers) overridesByTier[tier] = input.override;
+
+  const toggledFileKeys = new Set(input.toggledFileKeys);
+  for (const file of input.files) {
+    if (affectedTiers.has(file.tier)) {
+      toggledFileKeys.delete(file.key);
+      continue;
+    }
+    if (!file.visible) continue;
+    const foldedByDefault = input.overridesByTier[file.tier] !== "expanded";
+    if ((input.override === "folded") === foldedByDefault) toggledFileKeys.delete(file.key);
+    else toggledFileKeys.add(file.key);
+  }
+
+  return { overridesByTier, toggledFileKeys };
 }

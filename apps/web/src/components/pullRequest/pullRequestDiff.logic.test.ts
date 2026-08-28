@@ -1,7 +1,11 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { describe, expect, it } from "vite-plus/test";
 
-import { isFileDiffCollapsed, isLineInFileDiff } from "./pullRequestDiff.logic";
+import {
+  applyVisibleDiffFoldOverride,
+  isFileDiffCollapsed,
+  isLineInFileDiff,
+} from "./pullRequestDiff.logic";
 
 /** Only the hunk ranges matter here; the viewer fills the rest in when it renders. */
 function fileWithHunks(
@@ -77,5 +81,46 @@ describe("isFileDiffCollapsed", () => {
   it("still answers to a toggle after either toolbar press", () => {
     expect(isFileDiffCollapsed("a.ts", "expanded", new Set(["a.ts"]))).toBe(true);
     expect(isFileDiffCollapsed("a.ts", "folded", new Set(["a.ts"]))).toBe(false);
+  });
+});
+
+describe("applyVisibleDiffFoldOverride", () => {
+  const DEFAULTS = { source: null, test: null, generated: null } as const;
+  const files = [
+    { key: "source", tier: "source", visible: true },
+    { key: "shown-test", tier: "test", visible: true },
+    { key: "hidden-test", tier: "test", visible: false },
+    { key: "actionable-generated", tier: "generated", visible: true },
+    { key: "hidden-generated", tier: "generated", visible: false },
+  ] as const;
+
+  it("sets defaults for shown tiers while preserving deferred tiers", () => {
+    const result = applyVisibleDiffFoldOverride({
+      override: "expanded",
+      shownTiers: new Set(["test"]),
+      files,
+      overridesByTier: DEFAULTS,
+      toggledFileKeys: new Set(),
+    });
+
+    expect(result.overridesByTier).toEqual({
+      source: "expanded",
+      test: "expanded",
+      generated: null,
+    });
+    expect(result.toggledFileKeys).toEqual(new Set(["actionable-generated"]));
+  });
+
+  it("changes an actionable exception without changing its deferred tier default", () => {
+    const result = applyVisibleDiffFoldOverride({
+      override: "folded",
+      shownTiers: new Set(),
+      files,
+      overridesByTier: { ...DEFAULTS, generated: "expanded" },
+      toggledFileKeys: new Set(["source", "hidden-test"]),
+    });
+
+    expect(result.overridesByTier.generated).toBe("expanded");
+    expect(result.toggledFileKeys).toEqual(new Set(["hidden-test", "actionable-generated"]));
   });
 });
