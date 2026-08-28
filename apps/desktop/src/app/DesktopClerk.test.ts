@@ -1,8 +1,12 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import { beforeEach, vi } from "vite-plus/test";
+
+import type * as Electron from "electron";
 
 const { createClerkBridgeMock, storageAdapter, storageMock } = vi.hoisted(() => ({
   createClerkBridgeMock: vi.fn(),
@@ -179,6 +183,80 @@ describe("DesktopClerk", () => {
       Effect.provideService(ElectronApp.ElectronApp, electronApp),
       Effect.provideService(ElectronWindow.ElectronWindow, electronWindow),
     );
+  });
+
+  it.effect("reveals the main window for a normal second instance", () => {
+    storageMock.mockReturnValue(storageAdapter);
+    createClerkBridgeMock.mockReturnValue({ cleanup: vi.fn(), isPrimaryInstance: true });
+
+    return Effect.gen(function* () {
+      const revealed = yield* Deferred.make<void>();
+      let secondInstanceListener: ((event: unknown, argv: string[]) => void) | undefined;
+      const electronApp = {
+        quit: Effect.void,
+        on: (eventName: string, listener: (event: unknown, argv: string[]) => void) =>
+          Effect.sync(() => {
+            if (eventName === "second-instance") secondInstanceListener = listener;
+          }),
+      } as unknown as ElectronApp.ElectronApp["Service"];
+      const mainWindow = {} as Electron.BrowserWindow;
+      const electronWindow = {
+        currentMainOrFirst: Effect.succeed(Option.some(mainWindow)),
+        reveal: (window: Electron.BrowserWindow) =>
+          Effect.sync(() => assert.strictEqual(window, mainWindow)).pipe(
+            Effect.andThen(Deferred.succeed(revealed, undefined)),
+          ),
+      } as unknown as ElectronWindow.ElectronWindow["Service"];
+
+      yield* Effect.gen(function* () {
+        const clerk = yield* DesktopClerk.DesktopClerk;
+        yield* Effect.scoped(clerk.configure);
+        assert.isDefined(secondInstanceListener);
+
+        secondInstanceListener({}, ["T3 Code (Alpha).exe"]);
+        yield* Deferred.await(revealed);
+      }).pipe(
+        Effect.provide(makeDesktopClerkLayer()),
+        Effect.provideService(ElectronApp.ElectronApp, electronApp),
+        Effect.provideService(ElectronWindow.ElectronWindow, electronWindow),
+      );
+    });
+  });
+
+  it.effect("gracefully quits for an updater second-instance invocation", () => {
+    storageMock.mockReturnValue(storageAdapter);
+    createClerkBridgeMock.mockReturnValue({ cleanup: vi.fn(), isPrimaryInstance: true });
+
+    return Effect.gen(function* () {
+      const quitRequested = yield* Deferred.make<void>();
+      let secondInstanceListener: ((event: unknown, argv: string[]) => void) | undefined;
+      const reveal = vi.fn();
+      const electronApp = {
+        quit: Deferred.succeed(quitRequested, undefined),
+        on: (eventName: string, listener: (event: unknown, argv: string[]) => void) =>
+          Effect.sync(() => {
+            if (eventName === "second-instance") secondInstanceListener = listener;
+          }),
+      } as unknown as ElectronApp.ElectronApp["Service"];
+      const electronWindow = {
+        currentMainOrFirst: Effect.succeed(Option.none()),
+        reveal: Effect.sync(reveal),
+      } as unknown as ElectronWindow.ElectronWindow["Service"];
+
+      yield* Effect.gen(function* () {
+        const clerk = yield* DesktopClerk.DesktopClerk;
+        yield* Effect.scoped(clerk.configure);
+        assert.isDefined(secondInstanceListener);
+
+        secondInstanceListener({}, ["T3 Code (Alpha).exe", DesktopClerk.QUIT_FOR_UPDATE_ARGUMENT]);
+        yield* Deferred.await(quitRequested);
+        assert.equal(reveal.mock.calls.length, 0);
+      }).pipe(
+        Effect.provide(makeDesktopClerkLayer()),
+        Effect.provideService(ElectronApp.ElectronApp, electronApp),
+        Effect.provideService(ElectronWindow.ElectronWindow, electronWindow),
+      );
+    });
   });
 
   it.effect("quits and interrupts startup in a secondary instance", () => {

@@ -33,21 +33,17 @@ switch ($Action) {
       break
     }
 
-    $ids = @($processes | ForEach-Object { [int]$_.ProcessId })
-    $roots = @($processes | Where-Object { $ids -notcontains [int]$_.ParentProcessId })
-    foreach ($root in $roots) {
-      $process = Get-Process -Id $root.ProcessId -ErrorAction Stop
-      if (-not $process.CloseMainWindow()) {
-        throw "T3 Code process $($root.ProcessId) has no closable window. Close it normally and rerun the update."
-      }
-    }
+    # Electron forwards this invocation to the primary instance through its
+    # single-instance lock. The primary then runs its normal graceful shutdown,
+    # even when its main window is hidden in the Windows tray.
+    Start-Process -FilePath $installedExe -ArgumentList "--t3code-quit-for-update" | Out-Null
 
     $deadline = [DateTime]::UtcNow.AddSeconds(45)
     while ((Get-T3Processes).Count -gt 0 -and [DateTime]::UtcNow -lt $deadline) {
       Start-Sleep -Milliseconds 250
     }
     if ((Get-T3Processes).Count -gt 0) {
-      throw "T3 Code did not exit within 45 seconds. It was not force-killed; close it normally and rerun the update."
+      throw "T3 Code did not exit within 45 seconds. It may not support updater-requested shutdown yet; choose Close from its tray menu and rerun the update."
     }
 
     Write-Output "T3 Code closed cleanly."
