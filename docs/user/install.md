@@ -29,6 +29,10 @@ Windows:
 winget install T3Tools.T3Code
 ```
 
+On Windows, closing the desktop window keeps T3 Code running in the system tray. Click the tray
+icon or choose **Open** to show the window again. To exit T3 Code, right-click the tray icon and
+choose **Close**.
+
 macOS:
 
 ```bash

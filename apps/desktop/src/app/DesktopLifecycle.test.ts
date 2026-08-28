@@ -13,6 +13,7 @@ import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopLifecycle from "./DesktopLifecycle.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
 import * as DesktopState from "./DesktopState.ts";
+import * as DesktopTray from "./DesktopTray.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 
 function makeElectronAppLayer(
@@ -98,10 +99,21 @@ function makeDesktopWindowLayer(
   });
 }
 
+function makeDesktopTrayLayer(allowMainWindowClose: () => void = () => undefined) {
+  return Layer.succeed(DesktopTray.DesktopTray, {
+    register: Effect.void,
+    setOpenHandler: () => undefined,
+    allowMainWindowClose,
+    resetMainWindowClose: () => undefined,
+    shouldHideMainWindowOnClose: () => false,
+  } satisfies DesktopTray.DesktopTray["Service"]);
+}
+
 describe("DesktopLifecycle", () => {
   for (const platform of ["darwin", "win32", "linux"] satisfies ReadonlyArray<NodeJS.Platform>) {
     it.effect(`lets the updater's quit event proceed on ${platform}`, () => {
       const appListeners = new Map<string, (...args: readonly unknown[]) => void>();
+      let mainWindowCloseAllowed = false;
       const environmentLayer = Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
         platform,
         isDevelopment: false,
@@ -112,6 +124,11 @@ describe("DesktopLifecycle", () => {
         Layer.provideMerge(electronThemeLayer),
         Layer.provideMerge(makeElectronWindowLayer()),
         Layer.provideMerge(makeDesktopWindowLayer()),
+        Layer.provideMerge(
+          makeDesktopTrayLayer(() => {
+            mainWindowCloseAllowed = true;
+          }),
+        ),
         Layer.provideMerge(environmentLayer),
         Layer.provideMerge(DesktopShutdown.layer),
         Layer.provideMerge(DesktopState.layer),
@@ -123,6 +140,7 @@ describe("DesktopLifecycle", () => {
           yield* lifecycle.register;
 
           appListeners.get("before-quit-for-update")?.();
+          assert.isTrue(mainWindowCloseAllowed);
 
           let prevented = false;
           const event = {
@@ -161,6 +179,9 @@ describe("DesktopLifecycle", () => {
       const flushMainWindowBounds = Effect.sync(() => {
         events.push("flush");
       });
+      const allowMainWindowClose = () => {
+        events.push("allow-window-close");
+      };
 
       const desktopShutdownLayer = Layer.succeed(DesktopShutdown.DesktopShutdown, {
         request: Effect.sync(() => {
@@ -182,6 +203,7 @@ describe("DesktopLifecycle", () => {
         Layer.provideMerge(electronThemeLayer),
         Layer.provideMerge(makeElectronWindowLayer(destroyAll)),
         Layer.provideMerge(makeDesktopWindowLayer({ flushMainWindowBounds })),
+        Layer.provideMerge(makeDesktopTrayLayer(allowMainWindowClose)),
         Layer.provideMerge(environmentLayer),
         Layer.provideMerge(desktopShutdownLayer),
         Layer.provideMerge(DesktopState.layer),
@@ -200,8 +222,13 @@ describe("DesktopLifecycle", () => {
           yield* Deferred.succeed(allowShutdown, undefined);
           yield* Deferred.await(quitRequested);
 
-          assert.deepEqual(eventsBeforeCleanup, ["flush", "destroy", "request"]);
-          assert.deepEqual(events, ["flush", "destroy", "request", "quit"]);
+          assert.deepEqual(eventsBeforeCleanup, [
+            "allow-window-close",
+            "flush",
+            "destroy",
+            "request",
+          ]);
+          assert.deepEqual(events, ["allow-window-close", "flush", "destroy", "request", "quit"]);
         }),
       ).pipe(Effect.provide(layer));
     }),
@@ -223,6 +250,7 @@ describe("DesktopLifecycle", () => {
         Layer.provideMerge(electronThemeLayer),
         Layer.provideMerge(makeElectronWindowLayer()),
         Layer.provideMerge(makeDesktopWindowLayer({ activate })),
+        Layer.provideMerge(makeDesktopTrayLayer()),
         Layer.provideMerge(environmentLayer),
         Layer.provideMerge(DesktopShutdown.layer),
         Layer.provideMerge(DesktopState.layer),

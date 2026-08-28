@@ -38,6 +38,7 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopState from "../app/DesktopState.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
+import * as DesktopTray from "../app/DesktopTray.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronMenu from "../electron/ElectronMenu.ts";
 import * as ElectronShell from "../electron/ElectronShell.ts";
@@ -89,6 +90,7 @@ function makeFakeBrowserWindow() {
     focus: vi.fn(),
     getBounds: vi.fn(() => ({ x: 0, y: 0, width: 1100, height: 780 })),
     getNormalBounds: vi.fn(() => ({ x: 0, y: 0, width: 1100, height: 780 })),
+    hide: vi.fn(),
     isDestroyed: vi.fn(() => false),
     isFullScreen: vi.fn(() => false),
     isMaximized: vi.fn(() => false),
@@ -115,6 +117,7 @@ function makeFakeBrowserWindow() {
     window: window as unknown as Electron.BrowserWindow,
     getBounds: window.getBounds,
     getNormalBounds: window.getNormalBounds,
+    hide: window.hide,
     isDestroyed: window.isDestroyed,
     isFullScreen: window.isFullScreen,
     isMaximized: window.isMaximized,
@@ -176,26 +179,62 @@ const electronThemeLayer = Layer.succeed(ElectronTheme.ElectronTheme, {
   onUpdated: () => Effect.void,
 } satisfies ElectronTheme.ElectronTheme["Service"]);
 
-const desktopEnvironmentLayer = DesktopEnvironment.layer(environmentInput).pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      NodeServices.layer,
-      DesktopConfig.layerTest({
-        T3CODE_PORT: "3773",
-        VITE_DEV_SERVER_URL: "http://127.0.0.1:5733",
-      }),
+function makeDesktopEnvironmentLayer(platform: NodeJS.Platform = environmentInput.platform) {
+  return DesktopEnvironment.layer({ ...environmentInput, platform }).pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        NodeServices.layer,
+        DesktopConfig.layerTest({
+          T3CODE_PORT: "3773",
+          VITE_DEV_SERVER_URL: "http://127.0.0.1:5733",
+        }),
+      ),
     ),
-  ),
-);
+  );
+}
+
+const desktopEnvironmentLayer = makeDesktopEnvironmentLayer();
 
 const desktopWindowBoundsEquivalence = Schema.toEquivalence(
   DesktopAppSettings.DesktopWindowBoundsSchema,
 );
 
+function makeDesktopTrayLayer(
+  input: {
+    readonly shouldHideMainWindowOnClose?: boolean | undefined;
+    readonly allowMainWindowClose?: (() => void) | undefined;
+    readonly resetMainWindowClose?: (() => void) | undefined;
+    readonly setOpenHandler?: ((open: () => void) => void) | undefined;
+  } = {},
+) {
+  let mainWindowCloseAllowed = false;
+  return Layer.succeed(DesktopTray.DesktopTray, {
+    register: Effect.void,
+    setOpenHandler: (open) => {
+      input.setOpenHandler?.(open);
+    },
+    allowMainWindowClose: () => {
+      mainWindowCloseAllowed = true;
+      input.allowMainWindowClose?.();
+    },
+    resetMainWindowClose: () => {
+      mainWindowCloseAllowed = false;
+      input.resetMainWindowClose?.();
+    },
+    shouldHideMainWindowOnClose: () =>
+      (input.shouldHideMainWindowOnClose ?? false) && !mainWindowCloseAllowed,
+  } satisfies DesktopTray.DesktopTray["Service"]);
+}
+
 function makeTestLayer(input: {
   readonly window: Electron.BrowserWindow;
   readonly createCount: Ref.Ref<number>;
   readonly mainWindow: Ref.Ref<Option.Option<Electron.BrowserWindow>>;
+  readonly platform?: NodeJS.Platform;
+  readonly trayShouldHideMainWindowOnClose?: boolean;
+  readonly trayAllowMainWindowClose?: () => void;
+  readonly trayResetMainWindowClose?: () => void;
+  readonly trayOpenHandlers?: Array<() => void>;
   readonly createdWindowOptions?: Electron.BrowserWindowConstructorOptions[];
   readonly desktopSettings?: DesktopAppSettings.DesktopSettings;
   readonly mainWindowBoundsUpdates?: DesktopAppSettings.DesktopWindowBounds[];
@@ -263,9 +302,15 @@ function makeTestLayer(input: {
     Layer.provide(
       Layer.mergeAll(
         desktopAssetsLayer,
-        desktopEnvironmentLayer,
+        makeDesktopEnvironmentLayer(input.platform),
         desktopAppSettingsLayer,
         desktopClientSettingsLayer,
+        makeDesktopTrayLayer({
+          shouldHideMainWindowOnClose: input.trayShouldHideMainWindowOnClose,
+          allowMainWindowClose: input.trayAllowMainWindowClose,
+          resetMainWindowClose: input.trayResetMainWindowClose,
+          setOpenHandler: (open) => input.trayOpenHandlers?.push(open),
+        }),
         desktopServerExposureLayer,
         DesktopState.layer,
         electronAppLayer,
@@ -371,6 +416,7 @@ const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWindow | n
           desktopEnvironmentLayer,
           DesktopAppSettings.layerTest(),
           desktopClientSettingsLayer,
+          makeDesktopTrayLayer(),
           desktopServerExposureLayer,
           electronAppLayer,
           electronMenuLayer,
@@ -707,6 +753,91 @@ describe("DesktopWindow", () => {
         assert.deepEqual(mainWindowMaximizedUpdates, [true]);
         assert.equal(fakeWindow.getNormalBounds.mock.calls.length, 1);
         assert.equal(fakeWindow.getBounds.mock.calls.length, 0);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("hides the main window instead of closing it on Windows when tray is active", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      let allowMainWindowCloseCount = 0;
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        platform: "win32",
+        trayShouldHideMainWindowOnClose: true,
+        trayAllowMainWindowClose: () => {
+          allowMainWindowCloseCount += 1;
+        },
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+        const close = fakeWindow.windowListeners.get("close");
+        if (!close) {
+          return yield* Effect.die("window close listener was not registered");
+        }
+
+        const querySessionEnd = fakeWindow.windowListeners.get("query-session-end");
+        if (!querySessionEnd) {
+          return yield* Effect.die("Windows query-session-end listener was not registered");
+        }
+        querySessionEnd({} as Electron.Event);
+        assert.equal(allowMainWindowCloseCount, 1);
+
+        let prevented = false;
+        close({ preventDefault: () => (prevented = true) });
+
+        assert.isFalse(prevented);
+        assert.equal(fakeWindow.hide.mock.calls.length, 0);
+
+        prevented = false;
+        close({ preventDefault: () => (prevented = true) });
+
+        assert.isTrue(prevented);
+        assert.equal(fakeWindow.hide.mock.calls.length, 1);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("recreates the main window when tray Open is used after it was closed", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const trayOpenHandlers: Array<() => void> = [];
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        platform: "win32",
+        trayOpenHandlers,
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        assert.equal(yield* Ref.get(createCount), 1);
+
+        const closed = fakeWindow.windowListeners.get("closed");
+        if (!closed) {
+          return yield* Effect.die("window closed listener was not registered");
+        }
+        closed();
+
+        const open = trayOpenHandlers[0];
+        if (!open) {
+          return yield* Effect.die("tray Open handler was not registered");
+        }
+        open();
+        yield* Effect.promise(() => Promise.resolve());
+
+        assert.equal(yield* Ref.get(createCount), 2);
       }).pipe(Effect.provide(layer));
     }),
   );
