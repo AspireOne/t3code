@@ -243,7 +243,12 @@ describe("DesktopBackendConfiguration", () => {
                 },
                 ensureNodePty: (distro) => {
                   observedDistros.push(distro);
-                  return { ok: true, nodePath: "/usr/bin/node", resolvedPath: "/usr/bin:/bin" };
+                  return {
+                    ok: true,
+                    nodePath: "/usr/bin/node",
+                    resolvedPath: "/usr/bin:/bin",
+                    sshAuthSock: null,
+                  };
                 },
                 getDistroIp: (distro) => {
                   observedDistros.push(distro);
@@ -300,7 +305,12 @@ describe("DesktopBackendConfiguration", () => {
                   isAvailable: true,
                   distros: [{ name: "Ubuntu", isDefault: true, version: 2 }],
                   windowsToWslPath: () => Option.some(linuxEntryPath),
-                  ensureNodePty: () => ({ ok: true, nodePath, resolvedPath }),
+                  ensureNodePty: () => ({
+                    ok: true,
+                    nodePath,
+                    resolvedPath,
+                    sshAuthSock: "/tmp/ssh-agent/socket",
+                  }),
                   getDistroIp: () => Option.some("172.27.0.99"),
                 }),
               ),
@@ -324,6 +334,7 @@ describe("DesktopBackendConfiguration", () => {
           "--exec",
           "env",
           "PATH=/home/test user's/.nvm/versions/node/v22.0.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/test user/bin:/opt/test's tools/bin:/usr/bin:/bin",
+          "SSH_AUTH_SOCK=/tmp/ssh-agent/socket",
           nodePath,
           linuxEntryPath,
           "--bootstrap-fd",

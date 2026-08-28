@@ -222,6 +222,9 @@ interface WslPreflightSuccess {
   // PATH captured from the same login shell after the shared resolver loaded
   // version managers. The launch forwards this value directly without a shell.
   readonly resolvedPath: string;
+  // SSH agent socket captured from the user's interactive WSL shell. GUI-launched
+  // WSL servers do not otherwise inherit it, while integrated terminals do.
+  readonly sshAuthSock: string | null;
 }
 
 interface WslPreflightFailure {
@@ -328,6 +331,7 @@ const runWslPreflight = Effect.fn("desktop.backendConfiguration.wslPreflight")(f
     linuxEntryPath: linuxEntry.value,
     nodePath: nodePtyResult.nodePath,
     resolvedPath: nodePtyResult.resolvedPath,
+    sshAuthSock: nodePtyResult.sshAuthSock,
   } as const;
 });
 
@@ -590,6 +594,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   const lastSlash = preflight.nodePath.lastIndexOf("/");
   const nodeBinDir = lastSlash > 0 ? preflight.nodePath.slice(0, lastSlash) : "/usr/bin";
   const launchPath = `${nodeBinDir}:${WSL_SERVER_SYSTEM_PATH}:${preflight.resolvedPath}`;
+  const sshAgentArgs = preflight.sshAuthSock ? [`SSH_AUTH_SOCK=${preflight.sshAuthSock}`] : [];
 
   return {
     ...baseConfig,
@@ -598,6 +603,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
       "--exec",
       "env",
       `PATH=${launchPath}`,
+      ...sshAgentArgs,
       preflight.nodePath,
       preflight.linuxEntryPath,
       "--bootstrap-fd",
