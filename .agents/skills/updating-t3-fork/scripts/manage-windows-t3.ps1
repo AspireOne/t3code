@@ -4,7 +4,13 @@ param(
   [ValidateSet("Stop", "Install", "Launch", "Status")]
   [string]$Action,
 
-  [string]$InstallerPath
+  [string]$InstallerPath,
+
+  [ValidateRange(1, 300)]
+  [int]$LaunchTimeoutSeconds = 60,
+
+  [ValidateRange(1, 30)]
+  [int]$LaunchStabilitySeconds = 3
 )
 
 $ErrorActionPreference = "Stop"
@@ -77,14 +83,39 @@ switch ($Action) {
       throw "The installed T3 executable was not found at $installedExe."
     }
 
-    $existing = Get-T3Processes
-    if ($existing.Count -gt 0) {
-      Write-Output "T3 Code is already running."
-      break
+    $deadline = [DateTime]::UtcNow.AddSeconds($LaunchTimeoutSeconds)
+    $attempt = 0
+    while ([DateTime]::UtcNow -lt $deadline) {
+      $processes = Get-T3Processes
+      if ($processes.Count -eq 0) {
+        $attempt++
+        $process = Start-Process -FilePath $installedExe -PassThru
+        Write-Output "Launched T3 Code process $($process.Id) (attempt $attempt)."
+      } elseif ($attempt -eq 0) {
+        Write-Output "T3 Code is already running."
+      }
+
+      $stabilityDeadline = [DateTime]::UtcNow.AddSeconds($LaunchStabilitySeconds)
+      while ([DateTime]::UtcNow -lt $stabilityDeadline) {
+        if ((Get-T3Processes).Count -eq 0) {
+          break
+        }
+        Start-Sleep -Milliseconds 250
+      }
+
+      $processes = Get-T3Processes
+      if ($processes.Count -gt 0) {
+        Write-Output "T3 Code remained running for $LaunchStabilitySeconds seconds."
+        break
+      }
+
+      Write-Output "T3 Code exited during startup; waiting for installer cleanup before retrying."
+      Start-Sleep -Seconds 1
     }
 
-    $process = Start-Process -FilePath $installedExe -PassThru
-    Write-Output "Launched T3 Code process $($process.Id)."
+    if ((Get-T3Processes).Count -eq 0) {
+      throw "T3 Code did not remain running within $LaunchTimeoutSeconds seconds."
+    }
   }
 
   "Status" {

@@ -194,32 +194,16 @@ if [[ "$launch_enabled" = false ]]; then
 fi
 
 printf 'Waiting for Windows to finish installer cleanup...\n'
-sleep 2
 launch_started_epoch=$(date -u +%s)
 pwsh.exe -NoProfile -ExecutionPolicy Bypass \
   -File "$manager_script_windows" \
   -Action Launch
 
-sleep 2
 launch_status=$(pwsh.exe -NoProfile -ExecutionPolicy Bypass \
   -File "$manager_script_windows" \
   -Action Status)
 launch_process_count=$(jq -r '.processes | length' <<<"$launch_status")
-if [[ "$launch_process_count" -eq 0 ]]; then
-  # NSIS cleanup can briefly outlive the installer process. Retry the normal
-  # launcher once instead of treating that transient first exit as a crash.
-  printf 'Initial launch exited during installer cleanup; retrying...\n'
-  sleep 5
-  pwsh.exe -NoProfile -ExecutionPolicy Bypass \
-    -File "$manager_script_windows" \
-    -Action Launch
-  sleep 2
-  launch_status=$(pwsh.exe -NoProfile -ExecutionPolicy Bypass \
-    -File "$manager_script_windows" \
-    -Action Status)
-  launch_process_count=$(jq -r '.processes | length' <<<"$launch_status")
-fi
-[[ "$launch_process_count" -gt 0 ]] || fail "T3 Code exited after two launch attempts"
+[[ "$launch_process_count" -gt 0 ]] || fail "T3 Code exited after the launch manager reported success"
 
 if [[ "$verify_enabled" = false ]]; then
   printf 'Installation and launch completed; health verification was skipped.\n'
