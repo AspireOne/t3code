@@ -35,6 +35,10 @@ for the command-level workflow.
 - Fetch upstream and tags, then resolve the release tag to its commit. Merge
   that tag, not `upstream/main`, so the fork contains exactly the intended
   released upstream history rather than later unreleased commits.
+- Upstream may update package manifests only in the first post-tag release
+  commit (usually `chore(release): prepare vX`). Include that version bump
+  before building, or the fork can report the previous version and show a
+  stale update notice.
 - If the release commit is already an ancestor of the fork, report that the
   fork is already at or ahead of that release. Never roll a newer fork back to
   the latest stable release automatically.
