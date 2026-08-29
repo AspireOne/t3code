@@ -13,6 +13,7 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "../ui/menu";
@@ -58,37 +59,50 @@ export function DiffFocusMenu(props: {
         <TooltipPopup side="top">{label}</TooltipPopup>
       </Tooltip>
       <DropdownMenuContent align="end" className="w-52">
-        <DropdownMenuLabel>Show in diff</DropdownMenuLabel>
-        <DropdownMenuCheckboxItem checked disabled closeOnClick={false}>
-          <span className="flex min-w-0 flex-1 justify-between gap-4">
-            <span>Source</span>
-            <span className="tabular-nums text-muted-foreground">Always</span>
-          </span>
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuCheckboxItem
-          checked={props.preferences.showTests}
-          closeOnClick={false}
-          disabled={props.testFileCount === 0}
-          onCheckedChange={(checked) => props.onTierVisibilityChange("test", checked)}
-        >
-          <span className="flex min-w-0 flex-1 justify-between gap-4">
-            <span>Tests</span>
-            <span className="tabular-nums text-muted-foreground">{props.testFileCount}</span>
-          </span>
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuCheckboxItem
-          checked={props.preferences.showGenerated}
-          closeOnClick={false}
-          disabled={props.generatedFileCount === 0}
-          onCheckedChange={(checked) => props.onTierVisibilityChange("generated", checked)}
-        >
-          <span className="flex min-w-0 flex-1 justify-between gap-4">
-            <span>Generated</span>
-            <span className="tabular-nums text-muted-foreground">{props.generatedFileCount}</span>
-          </span>
-        </DropdownMenuCheckboxItem>
+        <DiffFocusMenuGroup {...props} />
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+export function DiffFocusMenuGroup(props: {
+  readonly preferences: DiffFocusPreferences;
+  readonly testFileCount: number;
+  readonly generatedFileCount: number;
+  readonly onTierVisibilityChange: (tier: DiffFocusableTier, visible: boolean) => void;
+}) {
+  return (
+    <DropdownMenuGroup>
+      <DropdownMenuLabel>Show in diff</DropdownMenuLabel>
+      <DropdownMenuCheckboxItem checked disabled closeOnClick={false}>
+        <span className="flex min-w-0 flex-1 justify-between gap-4">
+          <span>Source</span>
+          <span className="tabular-nums text-muted-foreground">Always</span>
+        </span>
+      </DropdownMenuCheckboxItem>
+      <DropdownMenuCheckboxItem
+        checked={props.preferences.showTests}
+        closeOnClick={false}
+        disabled={props.testFileCount === 0}
+        onCheckedChange={(checked) => props.onTierVisibilityChange("test", checked)}
+      >
+        <span className="flex min-w-0 flex-1 justify-between gap-4">
+          <span>Tests</span>
+          <span className="tabular-nums text-muted-foreground">{props.testFileCount}</span>
+        </span>
+      </DropdownMenuCheckboxItem>
+      <DropdownMenuCheckboxItem
+        checked={props.preferences.showGenerated}
+        closeOnClick={false}
+        disabled={props.generatedFileCount === 0}
+        onCheckedChange={(checked) => props.onTierVisibilityChange("generated", checked)}
+      >
+        <span className="flex min-w-0 flex-1 justify-between gap-4">
+          <span>Generated</span>
+          <span className="tabular-nums text-muted-foreground">{props.generatedFileCount}</span>
+        </span>
+      </DropdownMenuCheckboxItem>
+    </DropdownMenuGroup>
   );
 }
 

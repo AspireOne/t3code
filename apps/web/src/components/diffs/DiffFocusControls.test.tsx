@@ -1,7 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import { DeferredDiffFiles, DiffFocusMenu } from "./DiffFocusControls";
+import { DropdownMenu } from "../ui/menu";
+import { DeferredDiffFiles, DiffFocusMenu, DiffFocusMenuGroup } from "./DiffFocusControls";
 
 describe("DiffFocusControls", () => {
   it("describes an active focus from the toolbar", () => {
@@ -16,6 +17,23 @@ describe("DiffFocusControls", () => {
     );
 
     expect(markup).toContain('aria-label="Review focus: 3 files deferred"');
+  });
+
+  it("groups its label and checkbox choices for Base UI", () => {
+    const markup = renderToStaticMarkup(
+      <DropdownMenu>
+        <DiffFocusMenuGroup
+          preferences={{ showTests: true, showGenerated: false }}
+          testFileCount={3}
+          generatedFileCount={1}
+          onTierVisibilityChange={() => undefined}
+        />
+      </DropdownMenu>,
+    );
+
+    expect(markup).toContain('role="group"');
+    expect(markup).toContain("Show in diff");
+    expect(markup.match(/role="menuitemcheckbox"/g)).toHaveLength(3);
   });
 
   it("renders one explicit row for each deferred category", () => {
