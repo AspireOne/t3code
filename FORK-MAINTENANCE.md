@@ -81,8 +81,8 @@ Production endpoints are `https://app.t3.codes` and
 The packaged desktop app intentionally uses the normal T3 identity and state
 locations. The install helper closes that exact per-user installation and backs
 up `~/.t3` plus `%APPDATA%/t3code` and `%APPDATA%/T3 Code (Alpha)` when present.
-It also invalidates the generated WSL server tree because fork builds may
-change while retaining the upstream semantic version. Do not run official and
-forked packaged WSL backends together: both currently use the distro's
-`~/.t3/userdata` database. Development runs should use `./.t3` or another
-explicit isolated base dir.
+Packaged WSL runtimes are keyed by their archive SHA-256, so fork builds that
+retain the upstream semantic version still receive a fresh runtime cache. Do
+not run official and forked packaged WSL backends together: both currently use
+the distro's `~/.t3/userdata` database. Development runs should use `./.t3` or
+another explicit isolated base dir.

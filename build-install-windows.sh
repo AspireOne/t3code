@@ -171,17 +171,6 @@ if [[ "$backup_enabled" = true ]]; then
   printf 'Backup: %s\n' "$backup_dir"
 fi
 
-# Fork builds can retain the upstream semantic version while changing the
-# bundled server. The desktop WSL extractor keys its generated tree by that
-# version, so invalidate the exact cache after the old backend has stopped.
-windows_user_profile=$(pwsh.exe -NoProfile -Command '[Environment]::GetFolderPath("UserProfile")' | tr -d '\r')
-windows_user_profile_wsl=$(wslpath -u "$windows_user_profile")
-wsl_server_tree_cache="$windows_user_profile_wsl/.t3/userdata/wsl-server-tree/$version"
-if [[ -d "$wsl_server_tree_cache" ]]; then
-  rm -rf -- "$wsl_server_tree_cache"
-  printf 'Invalidated WSL server cache: %s\n' "$wsl_server_tree_cache"
-fi
-
 artifact_windows=$(wslpath -w "$artifact")
 pwsh.exe -NoProfile -ExecutionPolicy Bypass \
   -File "$manager_script_windows" \
