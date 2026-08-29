@@ -14,6 +14,7 @@ import {
   NonNegativeInt,
   ThreadId,
   ProviderInterruptTurnInput,
+  ProviderCompactThreadInput,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
   ProviderSendTurnInput,
@@ -862,6 +863,33 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
+  const compactThread: ProviderServiceMethod<"compactThread"> = Effect.fn("compactThread")(
+    function* (rawInput) {
+      const input = yield* decodeInputOrValidationError({
+        operation: "ProviderService.compactThread",
+        schema: ProviderCompactThreadInput,
+        payload: rawInput,
+      });
+      const routed = yield* resolveRoutableSession({
+        threadId: input.threadId,
+        operation: "ProviderService.compactThread",
+        allowRecovery: true,
+      });
+      if (!routed.adapter.compactThread) {
+        return yield* new ProviderValidationError({
+          operation: "ProviderService.compactThread",
+          issue: `Provider '${routed.adapter.provider}' does not support thread compaction.`,
+        });
+      }
+      yield* Effect.annotateCurrentSpan({
+        "provider.operation": "compact-thread",
+        "provider.kind": routed.adapter.provider,
+        "provider.thread_id": input.threadId,
+      });
+      yield* routed.adapter.compactThread(routed.threadId);
+    },
+  );
+
   const respondToRequest: ProviderServiceMethod<"respondToRequest"> = Effect.fn("respondToRequest")(
     function* (rawInput) {
       const input = yield* decodeInputOrValidationError({
@@ -1221,6 +1249,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     startSession,
     sendTurn,
     interruptTurn,
+    compactThread,
     respondToRequest,
     respondToUserInput,
     stopSession,

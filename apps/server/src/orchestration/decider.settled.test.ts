@@ -79,6 +79,41 @@ function makeSession(status: OrchestrationSession["status"]): OrchestrationSessi
 }
 
 it.layer(NodeServices.layer)("settled thread decider", (it) => {
+  it.effect("accepts compaction only for a ready session and marks it pending", () =>
+    Effect.gen(function* () {
+      const decided = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.compact",
+          commandId: CommandId.make("cmd-compact-ready"),
+          threadId: ThreadId.make("thread-1"),
+          createdAt: NOW,
+        },
+        readModel: makeReadModel(null, null, makeSession("ready")),
+      });
+      const events = Array.isArray(decided) ? decided : [decided];
+      expect(events.map((event) => event.type)).toEqual([
+        "thread.session-set",
+        "thread.compaction-requested",
+      ]);
+      expect(events[0]?.type === "thread.session-set" && events[0].payload.session.status).toBe(
+        "starting",
+      );
+
+      for (const status of ["starting", "running", "error", "stopped"] as const) {
+        const error = yield* decideOrchestrationCommand({
+          command: {
+            type: "thread.compact",
+            commandId: CommandId.make(`cmd-compact-${status}`),
+            threadId: ThreadId.make("thread-1"),
+            createdAt: NOW,
+          },
+          readModel: makeReadModel(null, null, makeSession(status)),
+        }).pipe(Effect.flip);
+        expect(error._tag).toBe("OrchestrationCommandInvariantError");
+      }
+    }),
+  );
+
   it.effect("settles awake threads without a redundant wake and re-emits idempotently", () =>
     Effect.gen(function* () {
       const event = yield* decideOrchestrationCommand({

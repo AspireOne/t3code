@@ -624,6 +624,7 @@ export interface ChatComposerProps {
   activeContextWindow: ContextWindowSnapshot | null;
   compactDisabled: boolean;
   compactDisabledReason: string | null;
+  supportsNativeCompaction: boolean;
 
   // Misc
   resolvedTheme: "light" | "dark";
@@ -642,6 +643,7 @@ export interface ChatComposerProps {
   // Callbacks
   onSend: (e?: { preventDefault: () => void }, intent?: ComposerSubmissionIntent) => void;
   onInterrupt: () => void;
+  onNativeCompact: () => void;
   onImplementPlanInNewThread: () => void;
   onRespondToApproval: (
     requestId: ApprovalRequestId,
@@ -718,6 +720,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeContextWindow,
     compactDisabled,
     compactDisabledReason,
+    supportsNativeCompaction,
     resolvedTheme,
     settings,
     keybindings,
@@ -730,6 +733,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerElementContextsRef,
     onSend,
     onInterrupt,
+    onNativeCompact,
     onImplementPlanInNewThread,
     onRespondToApproval,
     onSelectActivePendingUserInputOption,
@@ -1159,6 +1163,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           label: "/model",
           description: "Switch response model for this thread",
         },
+        ...(selectedProvider === "codex" && supportsNativeCompaction && activeThreadId
+          ? ([
+              {
+                id: "slash:compact",
+                type: "slash-command",
+                command: "compact",
+                label: "/compact",
+                description: "Compact this thread's context",
+              },
+            ] as const)
+          : []),
         ...(planModeUiEnabled
           ? ([
               {
@@ -1845,6 +1860,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           }
           return;
         }
+        if (item.command === "compact") {
+          const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "/compact", {
+            expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+          });
+          if (applied) setComposerHighlightedItemId(null);
+          return;
+        }
         void handleInteractionModeChange(item.command === "plan" ? "plan" : "default");
         const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
           expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
@@ -2036,6 +2058,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       return;
     }
 
+    if (selectedProvider === "codex") {
+      onNativeCompact();
+      return;
+    }
+
     promptRef.current = "/compact";
     setComposerDraftPrompt(composerDraftTarget, "/compact");
     submitComposer();
@@ -2058,6 +2085,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     noProviderAvailable,
     pendingUserInputs.length,
     phase,
+    selectedProvider,
+    onNativeCompact,
     promptRef,
     setComposerDraftPrompt,
     submitComposer,
@@ -3608,7 +3637,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       compactDisabled || noProviderAvailable || isSendBusy || isConnecting
                     }
                     compactDisabledReason={resolvedCompactDisabledReason}
-                    {...(selectedProvider === "claudeAgent"
+                    {...(selectedProvider === "claudeAgent" ||
+                    (selectedProvider === "codex" && supportsNativeCompaction)
                       ? { onCompactContext: compactThreadContext }
                       : {})}
                   />

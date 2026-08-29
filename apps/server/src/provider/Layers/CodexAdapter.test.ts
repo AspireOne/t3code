@@ -87,6 +87,7 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
   public readonly interruptTurnImpl = vi.fn(
     (_turnId?: TurnId): Promise<void> => Promise.resolve(undefined),
   );
+  public readonly compactThreadImpl = vi.fn(() => Promise.resolve(undefined));
 
   public readonly readThreadImpl = vi.fn(
     (): Promise<CodexThreadSnapshot> =>
@@ -139,6 +140,8 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
   interruptTurn(turnId?: TurnId) {
     return Effect.promise(() => this.interruptTurnImpl(turnId));
   }
+
+  compactThread = Effect.promise(() => this.compactThreadImpl());
 
   readThread = Effect.promise(() => this.readThreadImpl());
 
@@ -295,6 +298,25 @@ validationLayer("CodexAdapterLive validation", (it) => {
         threadId: asThreadId("thread-1"),
         runtimeMode: "full-access",
       });
+    }),
+  );
+  it.effect("delegates native thread compaction to the Codex runtime", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-compact");
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      NodeAssert.ok(adapter.compactThread);
+      yield* adapter.compactThread(threadId);
+
+      NodeAssert.equal(
+        validationRuntimeFactory.lastRuntime?.compactThreadImpl.mock.calls.length,
+        1,
+      );
     }),
   );
 });

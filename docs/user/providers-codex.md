@@ -47,6 +47,13 @@ In an existing Codex thread, send `/feedback` or `/feedback` followed by a descr
 issue. T3 Code uploads the thread and Codex logs to OpenAI and shows a thread ID that you can copy
 and share with OpenAI employees.
 
+## Reduce context usage
+
+In an idle, existing Codex thread, send `/compact` by itself or use the compact action beside the
+context-window meter. T3 Code asks Codex to compact the thread natively, so the command does not
+appear as a chat message. The action is available in the web and desktop apps; mobile does not
+currently offer manual Codex compaction.
+
 ## Sub-agent models
 
 The web and desktop Agents panel shows each sub-agent's model and reasoning effort when Codex

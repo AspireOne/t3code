@@ -1494,6 +1494,7 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const compactedTurnKeys = new Set<string>();
   const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
     Effect.gen(function* () {
       const thread = yield* resolveThreadShell(event.threadId);
@@ -1511,6 +1512,14 @@ const make = Effect.gen(function* () {
 
       const now = event.createdAt;
       const eventTurnId = toTurnId(event.turnId);
+      const compactedTurnKey = event.turnId ? `${event.threadId}:${event.turnId}` : null;
+      if (event.type === "thread.state.changed" && event.payload.state === "compacted") {
+        if (compactedTurnKey && compactedTurnKeys.has(compactedTurnKey)) return;
+        if (compactedTurnKey) compactedTurnKeys.add(compactedTurnKey);
+      }
+      if (event.type === "turn.completed" && compactedTurnKey) {
+        compactedTurnKeys.delete(compactedTurnKey);
+      }
       const activeTurnId = thread.session?.activeTurnId ?? null;
       const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
         threadId: thread.id,

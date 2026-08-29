@@ -549,6 +549,15 @@ describe("CheckpointReactor", () => {
 
     NodeFS.writeFileSync(NodePath.join(harness.cwd, "README.md"), "v2\n", "utf8");
     harness.provider.emit({
+      type: "thread.state.changed",
+      eventId: EventId.make("evt-auto-compaction-1"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: ThreadId.make("thread-1"),
+      turnId: asTurnId("turn-1"),
+      payload: { state: "compacted" },
+    });
+    harness.provider.emit({
       type: "turn.completed",
       eventId: EventId.make("evt-turn-completed-1"),
       provider: ProviderDriverKind.make("codex"),

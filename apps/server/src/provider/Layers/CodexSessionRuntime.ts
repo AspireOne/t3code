@@ -200,6 +200,7 @@ export interface CodexSessionRuntimeShape {
     input: CodexSessionRuntimeSendTurnInput,
   ) => Effect.Effect<ProviderTurnStartResult, CodexSessionRuntimeError>;
   readonly interruptTurn: (turnId?: TurnId) => Effect.Effect<void, CodexSessionRuntimeError>;
+  readonly compactThread?: Effect.Effect<void, CodexSessionRuntimeError>;
   readonly readThread: Effect.Effect<CodexThreadSnapshot, CodexSessionRuntimeError>;
   readonly rollbackThread: (
     numTurns: number,
@@ -868,6 +869,11 @@ function readRouteFields(notification: CodexServerNotification): {
     case "thread/started":
       return {
         turnId: undefined,
+        itemId: undefined,
+      };
+    case "thread/compacted":
+      return {
+        turnId: TurnId.make(notification.params.turnId),
         itemId: undefined,
       };
     case "turn/started":
@@ -2418,6 +2424,10 @@ export const makeCodexSessionRuntime = (
               : {}),
           } satisfies ProviderTurnStartResult;
         }),
+      compactThread: Effect.gen(function* () {
+        const providerThreadId = yield* readProviderThreadId;
+        yield* client.raw.request("thread/compact/start", { threadId: providerThreadId });
+      }).pipe(Effect.asVoid),
       interruptTurn: (turnId) =>
         Effect.gen(function* () {
           const providerThreadId = yield* readProviderThreadId;

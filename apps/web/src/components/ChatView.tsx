@@ -90,6 +90,7 @@ import { useDiffPanelStore } from "../diffPanelStore";
 import {
   collapseExpandedComposerCursor,
   type ComposerSubmissionIntent,
+  isStandaloneCompactCommand,
   parseStandaloneComposerSlashCommand,
 } from "../composer-logic";
 import {
@@ -1306,6 +1307,7 @@ function ChatViewContent(props: ChatViewProps) {
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, {
     reportFailure: false,
   });
+  const compactThread = useAtomCommand(threadEnvironment.compact, { reportFailure: false });
   const respondToThreadApproval = useAtomCommand(threadEnvironment.respondToApproval, {
     reportFailure: false,
   });
@@ -2766,29 +2768,35 @@ function ChatViewContent(props: ChatViewProps) {
     activeThread?.modelSelection.instanceId ??
     activeProject?.defaultModelSelection?.instanceId ??
     null;
-  const compactionProviderAvailable = useMemo(
-    () =>
-      hasAvailableClaudeCompactionProvider({
-        providers: applyProviderInstanceSettings(
-          deriveProviderInstanceEntries(providerStatuses),
-          settings,
-        ),
-        instanceId: activeProviderInstanceId,
-        lockedInstanceId: lockedProvider
-          ? (activeThread?.session?.providerInstanceId ??
-            activeThread?.modelSelection.instanceId ??
-            null)
-          : null,
-      }),
-    [
-      activeProviderInstanceId,
-      activeThread?.modelSelection.instanceId,
-      activeThread?.session?.providerInstanceId,
-      lockedProvider,
-      providerStatuses,
-      settings,
-    ],
-  );
+  const compactionProviderAvailable = useMemo(() => {
+    if (selectedProvider === "codex") {
+      return (
+        serverConfig?.environment.capabilities.threadCompaction === true &&
+        activeThread?.session?.status === "ready"
+      );
+    }
+    return hasAvailableClaudeCompactionProvider({
+      providers: applyProviderInstanceSettings(
+        deriveProviderInstanceEntries(providerStatuses),
+        settings,
+      ),
+      instanceId: activeProviderInstanceId,
+      lockedInstanceId: lockedProvider
+        ? (activeThread?.session?.providerInstanceId ??
+          activeThread?.modelSelection.instanceId ??
+          null)
+        : null,
+    });
+  }, [
+    activeProviderInstanceId,
+    activeThread?.modelSelection.instanceId,
+    activeThread?.session?.providerInstanceId,
+    lockedProvider,
+    providerStatuses,
+    selectedProvider,
+    serverConfig?.environment.capabilities.threadCompaction,
+    settings,
+  ]);
   const activeProviderStatus = useMemo(() => {
     if (activeProviderInstanceId) {
       return (
@@ -4446,6 +4454,7 @@ function ChatViewContent(props: ChatViewProps) {
     [activeThreadPrState, activeThreadPrUpdatedAt],
   );
   const supportsSettlement = serverConfig?.environment.capabilities.threadSettlement === true;
+  const supportsThreadCompaction = serverConfig?.environment.capabilities.threadCompaction === true;
   const supportsSnooze = serverConfig?.environment.capabilities.threadSnooze === true;
   const supportsPinning = serverConfig?.environment.capabilities.threadPinning === true;
   const activeThreadPinned = supportsPinning && activeThreadShell?.pinnedAt != null;
@@ -4843,7 +4852,7 @@ function ChatViewContent(props: ChatViewProps) {
     !activeThread ||
     !activeProject ||
     !isServerThread ||
-    selectedProvider !== "claudeAgent" ||
+    (selectedProvider !== "claudeAgent" && selectedProvider !== "codex") ||
     !compactionProviderAvailable ||
     isWorking ||
     threadDetailLoading ||
@@ -4860,7 +4869,9 @@ function ChatViewContent(props: ChatViewProps) {
       : !activeProject
         ? "Choose a project before compacting"
         : !compactionProviderAvailable
-          ? "Enable a Claude provider before compacting"
+          ? selectedProvider === "codex"
+            ? "Start a Codex thread before compacting"
+            : "Enable a Claude provider before compacting"
           : "Compacting is unavailable right now"
     : null;
   const resumeCompactionBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
@@ -5482,6 +5493,57 @@ function ChatViewContent(props: ChatViewProps) {
       composerReviewComments.length === 0
         ? parseCodexFeedbackCommand(trimmed)
         : null;
+    if (ctxSelectedProvider === "codex" && isStandaloneCompactCommand(trimmed)) {
+      if (!supportsThreadCompaction) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "warning",
+            title: "Update the T3 Code server to compact Codex threads",
+            description: "This server does not support native Codex compaction.",
+          }),
+        );
+        return;
+      }
+      const hasExtraContext =
+        composerImages.length > 0 ||
+        composerTerminalContexts.length > 0 ||
+        composerElementContexts.length > 0 ||
+        composerPreviewAnnotations.length > 0 ||
+        composerReviewComments.length > 0;
+      if (!isServerThread || activeThread.session?.status !== "ready" || hasExtraContext) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "warning",
+            title: hasExtraContext ? "Remove attached context first" : "Start a Codex thread first",
+            description: hasExtraContext
+              ? "/compact must be submitted by itself."
+              : "Send a message before compacting this thread.",
+          }),
+        );
+        return;
+      }
+      const result = await compactThread({
+        environmentId,
+        input: { threadId: activeThread.id },
+      });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not compact context",
+              description: error instanceof Error ? error.message : "Try again.",
+            }),
+          );
+        }
+        return;
+      }
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+      return;
+    }
     if (feedbackCommand) {
       if (!isServerThread || activeThread.session === null) {
         toastManager.add(
@@ -7122,6 +7184,12 @@ function ChatViewContent(props: ChatViewProps) {
                             activeContextWindow={activeContextWindow}
                             compactDisabled={compactDisabled}
                             compactDisabledReason={compactDisabledReason}
+                            supportsNativeCompaction={supportsThreadCompaction}
+                            onNativeCompact={() => {
+                              promptRef.current = "/compact";
+                              setComposerDraftPrompt(composerDraftTarget, "/compact");
+                              void onSend();
+                            }}
                             resolvedTheme={resolvedTheme}
                             settings={settings}
                             keybindings={keybindings}

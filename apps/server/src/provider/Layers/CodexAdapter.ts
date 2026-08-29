@@ -1126,6 +1126,10 @@ function mapToRuntimeEvents(
   }
 
   if (event.method === "item/started") {
+    const payload = readPayload(EffectCodexSchema.V2ItemStartedNotification, event.payload);
+    if (payload && toCanonicalItemType(payload.item.type) === "context_compaction") {
+      return [];
+    }
     const started = mapItemLifecycle(event, canonicalThreadId, "item.started");
     return started ? [started] : [];
   }
@@ -1137,6 +1141,18 @@ function mapToRuntimeEvents(
       return [];
     }
     const itemType = toCanonicalItemType(item.type);
+    if (itemType === "context_compaction") {
+      return [
+        {
+          ...runtimeEventBase(event, canonicalThreadId),
+          type: "thread.state.changed",
+          payload: {
+            state: "compacted",
+            detail: event.payload,
+          },
+        },
+      ];
+    }
     if (itemType === "plan") {
       const detail = itemDetail(itemType, item);
       if (!detail) {
@@ -1884,6 +1900,22 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       ),
     );
 
+  const compactThread: NonNullable<CodexAdapterShape["compactThread"]> = Effect.fn("compactThread")(
+    function* (threadId) {
+      const session = yield* requireSession(threadId);
+      if (!session.runtime.compactThread) {
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "thread/compact/start",
+          detail: "Codex runtime does not support thread compaction.",
+        });
+      }
+      yield* session.runtime.compactThread.pipe(
+        Effect.mapError((cause) => mapCodexRuntimeError(threadId, "thread/compact/start", cause)),
+      );
+    },
+  );
+
   const readThread: CodexAdapterShape["readThread"] = (threadId) =>
     requireSession(threadId).pipe(
       Effect.flatMap((session) => session.runtime.readThread),
@@ -2019,6 +2051,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     startSession,
     sendTurn,
     interruptTurn,
+    compactThread,
     readThread,
     rollbackThread,
     uploadFeedback,

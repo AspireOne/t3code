@@ -1061,6 +1061,59 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.compact": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (!thread.session) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Thread compaction requires an active provider session.",
+        });
+      }
+      if (thread.session.status !== "ready") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Thread compaction requires a ready provider session.",
+        });
+      }
+      const requestEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.compaction-requested",
+        payload: {
+          threadId: command.threadId,
+          createdAt: command.createdAt,
+        },
+      } satisfies PlannedOrchestrationEvent;
+      const pendingSessionEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.session-set",
+        payload: {
+          threadId: command.threadId,
+          session: {
+            ...thread.session,
+            status: "starting",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: command.createdAt,
+          },
+        },
+      } satisfies PlannedOrchestrationEvent;
+      return [pendingSessionEvent, requestEvent];
+    }
+
     case "thread.approval.respond": {
       yield* requireThread({
         readModel,
