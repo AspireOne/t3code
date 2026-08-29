@@ -40,6 +40,8 @@ import { buildCodexInitializeParams } from "./CodexProvider.ts";
 import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import { buildCodexDeveloperInstructions } from "../CodexDeveloperInstructions.ts";
+import { type CodexRateLimitCoordinatorShape } from "../CodexRateLimitCoordinator.ts";
+import { codexRateLimitAccountKeyFromAccount } from "../CodexRateLimits.ts";
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
 
 const PROVIDER = ProviderDriverKind.make("codex");
@@ -160,6 +162,7 @@ export interface CodexSessionRuntimeOptions {
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly resumeCursor?: CodexResumeCursor;
   readonly appServerArgs?: ReadonlyArray<string>;
+  readonly rateLimitCoordinator?: CodexRateLimitCoordinatorShape;
 }
 
 export interface CodexSessionRuntimeSendTurnInput {
@@ -769,6 +772,43 @@ function readNotificationThreadId(notification: CodexServerNotification): string
   }
 }
 
+export const coordinateCodexRateLimitNotification = Effect.fn(
+  "CodexSessionRuntime.coordinateRateLimitNotification",
+)(function* (input: {
+  readonly coordinator: CodexRateLimitCoordinatorShape | undefined;
+  readonly sessionId: string;
+  readonly rootProviderThreadId: string | undefined;
+  readonly notification: CodexServerNotification;
+}) {
+  if (input.notification.method === "account/updated") {
+    yield* input.coordinator?.accountChanged(input.sessionId) ?? Effect.void;
+  }
+
+  if (input.notification.method === "account/rateLimits/updated") {
+    yield* input.coordinator?.invalidate(input.sessionId) ?? Effect.void;
+    return true;
+  }
+
+  if (
+    input.rootProviderThreadId &&
+    readNotificationThreadId(input.notification) === input.rootProviderThreadId
+  ) {
+    if (input.notification.method === "turn/started") {
+      yield* (
+        input.coordinator?.turnStarted(input.sessionId, input.notification.params.turn.id) ??
+          Effect.void
+      );
+    } else if (input.notification.method === "turn/completed") {
+      yield* (
+        input.coordinator?.turnSettled(input.sessionId, input.notification.params.turn.id) ??
+          Effect.void
+      );
+    }
+  }
+
+  return false;
+});
+
 export function makeMemoryConsolidationNotificationFilter(): (
   notification: CodexServerNotification,
 ) => boolean {
@@ -1173,6 +1213,14 @@ export const makeCodexSessionRuntime = (
     const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
       Effect.provide(clientContext),
     );
+    const readAccountRateLimits = () =>
+      Effect.gen(function* () {
+        const account = yield* client.request("account/read", {});
+        const accountKey = codexRateLimitAccountKeyFromAccount(account.account);
+        if (accountKey === null) return { accountKey } as const;
+        const rateLimits = yield* client.request("account/rateLimits/read", undefined);
+        return { accountKey, rateLimits } as const;
+      });
     const serverNotifications = yield* Queue.unbounded<CodexServerNotification>();
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
     const randomUUIDv4 = (purpose: CodexErrors.CodexAppServerIdentifierPurpose) =>
@@ -1521,6 +1569,16 @@ export const makeCodexSessionRuntime = (
 
     const handleRawNotification = (notification: CodexServerNotification) =>
       Effect.gen(function* () {
+        const quotaNotificationIntercepted = yield* coordinateCodexRateLimitNotification({
+          coordinator: options.rateLimitCoordinator,
+          sessionId: options.threadId,
+          rootProviderThreadId: currentProviderThreadId(yield* Ref.get(sessionRef)),
+          notification,
+        });
+        if (quotaNotificationIntercepted) {
+          return;
+        }
+
         const isMemoryConsolidationNotification =
           suppressMemoryConsolidationNotification(notification);
 
@@ -2006,10 +2064,15 @@ export const makeCodexSessionRuntime = (
               return Effect.void;
             }
             const nextStatus = exitCode === 0 ? "closed" : "error";
-            return updateSession(sessionRef, {
-              status: nextStatus,
-              activeTurnId: undefined,
-            }).pipe(
+            return (
+              options.rateLimitCoordinator?.unregisterSession(options.threadId) ?? Effect.void
+            ).pipe(
+              Effect.andThen(
+                updateSession(sessionRef, {
+                  status: nextStatus,
+                  activeTurnId: undefined,
+                }),
+              ),
               Effect.andThen(
                 emitSessionEvent(
                   "session/exited",
@@ -2052,6 +2115,10 @@ export const makeCodexSessionRuntime = (
         updatedAt: yield* nowIso,
       } satisfies ProviderSession;
       yield* Ref.set(sessionRef, session);
+      yield* (
+        options.rateLimitCoordinator?.registerSession(options.threadId, readAccountRateLimits) ??
+          Effect.void
+      );
       yield* emitSessionEvent("session/ready", "Codex App Server session ready.");
       return session;
     });
@@ -2073,6 +2140,7 @@ export const makeCodexSessionRuntime = (
       }
       yield* settlePendingApprovals("cancel");
       yield* settlePendingUserInputs({});
+      yield* options.rateLimitCoordinator?.unregisterSession(options.threadId) ?? Effect.void;
       yield* updateSession(sessionRef, {
         status: "closed",
         activeTurnId: undefined,

@@ -45,6 +45,32 @@ describe("ServerProvider", () => {
     expect(parsed.skills).toEqual([]);
     expect(parsed.versionAdvisory).toBeUndefined();
     expect(parsed.updateState).toBeUndefined();
+    expect(parsed.rateLimits).toBeUndefined();
+  });
+
+  it("decodes account rate-limit windows without requiring them from older snapshots", () => {
+    const parsed = decodeServerProvider({
+      ...baseProviderSnapshot,
+      rateLimits: {
+        fetchedAt: "2026-04-10T00:01:00.000Z",
+        windows: [
+          {
+            windowDurationMins: 300,
+            usedPercent: 41,
+            resetsAt: "2026-04-10T05:00:00.000Z",
+          },
+          {
+            windowDurationMins: 10_080,
+            usedPercent: 45,
+            resetsAt: "2026-04-17T00:00:00.000Z",
+          },
+        ],
+      },
+    });
+
+    expect(parsed.rateLimits?.windows.map((window) => window.windowDurationMins)).toEqual([
+      300, 10_080,
+    ]);
   });
 
   it("defaults one-click update support when decoding older advisory snapshots", () => {

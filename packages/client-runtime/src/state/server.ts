@@ -324,10 +324,25 @@ const cachedConfigSnapshotEvent = (config: ServerConfig): ServerConfigStreamEven
   config,
 });
 
+export function stripEphemeralServerConfig(config: ServerConfig): ServerConfig {
+  let changed = false;
+  const providers = config.providers.map((provider) => {
+    if (!("rateLimits" in provider)) return provider;
+    changed = true;
+    const { rateLimits: _rateLimits, ...persistentProvider } = provider;
+    return persistentProvider;
+  });
+  if (!changed) return config;
+  return {
+    ...config,
+    providers,
+  };
+}
+
 /**
- * Keeps a complete server configuration available during reconnects. Server
- * config carries the provider/model catalogue used by task creation, so it is
- * useful—and safe—to retain after a transport session ends.
+ * Keeps durable server configuration available during reconnects. The
+ * provider/model catalogue is retained, while account-bound rate limits are
+ * removed and must be revalidated by a live server session.
  */
 export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConfigState.make")(
   function* () {
@@ -344,6 +359,7 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
           Effect.as(Option.none<ServerConfig>()),
         ),
       ),
+      Effect.map(Option.map(stripEphemeralServerConfig)),
     );
     const state = yield* SubscriptionRef.make<Option.Option<ServerConfigProjection>>(
       Option.map(cachedConfig, (config) => ({
@@ -358,7 +374,7 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
     const persist = Effect.fn("EnvironmentServerConfigState.persist")(function* (
       config: ServerConfig,
     ) {
-      return yield* cache.saveServerConfig(environmentId, config).pipe(
+      return yield* cache.saveServerConfig(environmentId, stripEphemeralServerConfig(config)).pipe(
         Effect.as(true),
         Effect.catch((error) =>
           Effect.logWarning("Could not persist cached server configuration.").pipe(

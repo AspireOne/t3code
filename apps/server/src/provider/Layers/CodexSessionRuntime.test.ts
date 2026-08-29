@@ -3,6 +3,7 @@ import * as NodeAssert from "node:assert/strict";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { describe } from "vite-plus/test";
 import { DEFAULT_MODEL, ThreadId } from "@t3tools/contracts";
 import * as CodexErrors from "effect-codex-app-server/errors";
@@ -17,6 +18,7 @@ import {
 import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import {
   buildTurnStartParams,
+  coordinateCodexRateLimitNotification,
   describeMcpElicitation,
   hasConfiguredMcpServer,
   isRecoverableThreadResumeError,
@@ -24,6 +26,10 @@ import {
   openCodexThread,
   toMcpElicitationResponse,
 } from "./CodexSessionRuntime.ts";
+import type {
+  CodexRateLimitCoordinatorShape,
+  CodexRateLimitSnapshot,
+} from "../CodexRateLimitCoordinator.ts";
 const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
 
 describe("CodexSessionRuntimeIdentifierGenerationError", () => {
@@ -64,6 +70,116 @@ function makeThreadOpenResponse(
       },
     },
   } as unknown as CodexRpc.ClientRequestResponsesByMethod["thread/start"];
+}
+
+describe("Codex account rate-limit notification coordination", () => {
+  it.effect("resets account-bound quota state before forwarding account changes", () =>
+    Effect.gen(function* () {
+      const calls: string[] = [];
+      const coordinator = makeRateLimitCoordinatorSpy(calls);
+
+      const intercepted = yield* coordinateCodexRateLimitNotification({
+        coordinator,
+        sessionId: "session-a",
+        rootProviderThreadId: "provider-root",
+        notification: {
+          method: "account/updated",
+          params: { authMode: "chatgpt", planType: "plus" },
+        },
+      });
+
+      NodeAssert.equal(intercepted, false);
+      NodeAssert.deepStrictEqual(calls, ["account-changed:session-a"]);
+    }),
+  );
+
+  it.effect("invalidates on sparse account updates without forwarding the notification", () =>
+    Effect.gen(function* () {
+      const calls: string[] = [];
+      const coordinator = makeRateLimitCoordinatorSpy(calls);
+
+      const intercepted = yield* coordinateCodexRateLimitNotification({
+        coordinator,
+        sessionId: "session-a",
+        rootProviderThreadId: "provider-root",
+        notification: {
+          method: "account/rateLimits/updated",
+          params: { rateLimits: {} },
+        },
+      });
+
+      NodeAssert.equal(intercepted, true);
+      NodeAssert.deepStrictEqual(calls, ["invalidate:session-a"]);
+    }),
+  );
+
+  it.effect("tracks only root turn boundaries and ignores child-agent turns", () =>
+    Effect.gen(function* () {
+      const calls: string[] = [];
+      const coordinator = makeRateLimitCoordinatorSpy(calls);
+
+      yield* coordinateCodexRateLimitNotification({
+        coordinator,
+        sessionId: "session-a",
+        rootProviderThreadId: "provider-root",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "provider-root",
+            turn: { id: "root-turn", status: "inProgress", items: [] },
+          },
+        },
+      });
+      yield* coordinateCodexRateLimitNotification({
+        coordinator,
+        sessionId: "session-a",
+        rootProviderThreadId: "provider-root",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "provider-root",
+            turn: { id: "root-turn", status: "completed", items: [] },
+          },
+        },
+      });
+      yield* coordinateCodexRateLimitNotification({
+        coordinator,
+        sessionId: "session-a",
+        rootProviderThreadId: "provider-root",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "provider-child",
+            turn: { id: "child-turn", status: "inProgress", items: [] },
+          },
+        },
+      });
+
+      NodeAssert.deepStrictEqual(calls, [
+        "started:session-a:root-turn",
+        "settled:session-a:root-turn",
+      ]);
+    }),
+  );
+});
+
+function makeRateLimitCoordinatorSpy(calls: string[]): CodexRateLimitCoordinatorShape {
+  return {
+    current: Effect.succeed(undefined as CodexRateLimitSnapshot | undefined),
+    generation: Effect.succeed(0),
+    changes: Stream.empty,
+    syncAccount: () => Effect.void,
+    registerSession: () => Effect.void,
+    unregisterSession: () => Effect.void,
+    accountChanged: (sessionId) =>
+      Effect.sync(() => calls.push(`account-changed:${sessionId}`)).pipe(Effect.asVoid),
+    turnStarted: (sessionId, turnId) =>
+      Effect.sync(() => calls.push(`started:${sessionId}:${turnId}`)).pipe(Effect.asVoid),
+    turnSettled: (sessionId, turnId) =>
+      Effect.sync(() => calls.push(`settled:${sessionId}:${turnId}`)).pipe(Effect.asVoid),
+    invalidate: (sessionId) =>
+      Effect.sync(() => calls.push(`invalidate:${sessionId}`)).pipe(Effect.asVoid),
+  };
 }
 
 describe("buildTurnStartParams", () => {

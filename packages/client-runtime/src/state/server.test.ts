@@ -40,6 +40,7 @@ import {
   resolveServerUpdateProgressResult,
   serverUpdateStateForProgressEvent,
   serverUpdateStateForServerVersion,
+  stripEphemeralServerConfig,
   validateServerUpdateReadyEvent,
 } from "./server.ts";
 
@@ -151,6 +152,46 @@ describe("update restart reconnect nudges", () => {
 });
 
 describe("server state projection", () => {
+  it("removes account rate limits from cached server configuration", () => {
+    const config = {
+      ...CONFIG,
+      providers: [
+        {
+          instanceId: "codex",
+          driver: "codex",
+          enabled: true,
+          installed: true,
+          version: "1.0.0",
+          status: "ready",
+          auth: { status: "authenticated", type: "chatgpt", email: "test@example.com" },
+          checkedAt: "2026-08-29T00:00:00.000Z",
+          models: [],
+          slashCommands: [],
+          skills: [],
+          rateLimits: {
+            fetchedAt: "2026-08-29T00:00:00.000Z",
+            windows: [
+              {
+                windowDurationMins: 300,
+                usedPercent: 40,
+                resetsAt: "2026-08-29T05:00:00.000Z",
+              },
+            ],
+          },
+        },
+      ],
+    } as unknown as ServerConfig;
+
+    const stripped = stripEphemeralServerConfig(config);
+
+    expect(stripped.providers[0]).toMatchObject({
+      instanceId: "codex",
+      auth: { email: "test@example.com" },
+    });
+    expect(stripped.providers[0]).not.toHaveProperty("rateLimits");
+    expect(config.providers[0]).toHaveProperty("rateLimits");
+  });
+
   it("only treats a legacy transport interruption as an unacknowledged handoff", () => {
     expect(isLegacyUpdateHandoffLoss(Cause.interrupt(1))).toBe(true);
     expect(

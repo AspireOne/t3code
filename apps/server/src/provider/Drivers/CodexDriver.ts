@@ -27,10 +27,13 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { makeCodexTextGeneration } from "../../textGeneration/CodexTextGeneration.ts";
+import { makeCodexRateLimitCoordinator } from "../CodexRateLimitCoordinator.ts";
+import { bindCodexRateLimits, codexRateLimitAccountKeyFromAuth } from "../CodexRateLimits.ts";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -151,6 +154,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         binaryPath: effectiveConfig.binaryPath,
         env: processEnv,
       });
+      const rateLimitCoordinator = yield* makeCodexRateLimitCoordinator();
 
       // `makeCodexAdapter` and `makeCodexTextGeneration` have `never` error
       // channels at construction time — their failure modes are all on the
@@ -161,6 +165,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       const adapter = yield* makeCodexAdapter(effectiveConfig, {
         instanceId,
         environment: processEnv,
+        rateLimitCoordinator,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
       });
       const textGeneration = yield* makeCodexTextGeneration(effectiveConfig, processEnv);
@@ -172,20 +177,35 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       // Kick the TTL-gated manifest refresh in the background and classify
       // with the in-memory manifest, so a slow or hung fetch never delays the
       // provider check. A refresh that lands mid-probe applies on the next one.
-      const checkProvider = modelManifest.refreshInBackground.pipe(
-        Effect.andThen(
-          Effect.zipWith(
-            checkCodexProviderStatus(effectiveConfig, undefined, processEnv),
-            modelManifest.current,
-            (draft, manifest) =>
-              stampIdentity(ModelManifest.applyModelManifest(draft, manifest, DRIVER_KIND)),
-            { concurrent: true },
+      const checkProvider = Effect.gen(function* () {
+        const expectedGeneration = yield* rateLimitCoordinator.generation;
+        const provider = yield* modelManifest.refreshInBackground.pipe(
+          Effect.andThen(
+            Effect.zipWith(
+              checkCodexProviderStatus(effectiveConfig, undefined, processEnv),
+              modelManifest.current,
+              (draft, manifest) =>
+                stampIdentity(ModelManifest.applyModelManifest(draft, manifest, DRIVER_KIND)),
+              { concurrent: true },
+            ),
           ),
-        ),
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-      );
+        );
+        const accountKey = codexRateLimitAccountKeyFromAuth(provider.auth);
+        if (accountKey === null) {
+          yield* rateLimitCoordinator.syncAccount(null, undefined, expectedGeneration);
+        } else if (accountKey !== undefined) {
+          yield* rateLimitCoordinator.syncAccount(
+            accountKey,
+            provider.rateLimits,
+            expectedGeneration,
+          );
+        }
+        return bindCodexRateLimits(provider, yield* rateLimitCoordinator.current);
+      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
       const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
-      const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<CodexSettings>>({
+      const managedSnapshot = yield* makeManagedServerProvider<
+        ProviderSnapshotSettings<CodexSettings>
+      >({
         maintenanceCapabilities,
         getSettings: snapshotSettings.getSettings,
         streamSettings: snapshotSettings.streamSettings,
@@ -203,7 +223,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
             enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
           }).pipe(
             Effect.provideService(HttpClient.HttpClient, httpClient),
-            Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),
+            Effect.flatMap(publishSnapshot),
           ),
       }).pipe(
         Effect.mapError(
@@ -216,6 +236,26 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
             }),
         ),
       );
+
+      const attachCurrentRateLimits = (provider: ServerProvider) =>
+        rateLimitCoordinator.current.pipe(
+          Effect.map((rateLimits) => bindCodexRateLimits(provider, rateLimits)),
+        );
+      const snapshot = {
+        maintenanceCapabilities: managedSnapshot.maintenanceCapabilities,
+        getSnapshot: managedSnapshot.getSnapshot.pipe(Effect.flatMap(attachCurrentRateLimits)),
+        refresh: managedSnapshot.refresh.pipe(Effect.flatMap(attachCurrentRateLimits)),
+        streamChanges: Stream.merge(
+          managedSnapshot.streamChanges.pipe(Stream.mapEffect(attachCurrentRateLimits)),
+          rateLimitCoordinator.changes.pipe(
+            Stream.mapEffect((rateLimits) =>
+              managedSnapshot.getSnapshot.pipe(
+                Effect.map((provider) => bindCodexRateLimits(provider, rateLimits)),
+              ),
+            ),
+          ),
+        ),
+      } satisfies typeof managedSnapshot;
 
       return {
         instanceId,

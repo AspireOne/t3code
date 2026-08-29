@@ -51,6 +51,34 @@ probes, respect the `enableProviderUpdateChecks` setting, and never fail a provi
 Codex and Claude drivers apply the classification to every snapshot with `applyModelManifest`;
 driver kinds absent from the manifest have no legacy concept.
 
+## Codex account limits
+
+ChatGPT-authenticated Codex instances expose account-level rolling windows on the optional
+`ServerProvider.rateLimits` snapshot field. `CodexRateLimitCoordinator` owns the state per provider
+instance. Live sessions register readers and request refreshes on root turn boundaries and
+`account/rateLimits/updated` notifications. The existing Codex provider-health probe handles initial
+and idle refreshes in the same app-server process it already uses for account, model, and skill
+checks. Sparse notifications are invalidations rather than snapshots, so the coordinator always
+follows them with a complete live-session read.
+
+The coordinator polls once per instance every 30 seconds while any root turn is active. The managed
+provider's existing demand-aware health lifecycle supplies the five-minute idle cadence and respects
+the environment's provider-status background settings. The coordinator's permanent scoped loop
+derives its work from the current session map, so concurrent turn boundaries cannot create or orphan
+polling fibers. Concurrent sessions share the same semaphore and recent-success gate, and queued
+forced refreshes coalesce after another request succeeds. Each live read includes `account/read`; an
+email-derived account key and account generation prevent stale processes or health probes from
+publishing another account's limits. Process exit unregisters its reader and active turns
+immediately.
+
+Read failures preserve the last successful value. A successful empty response, logout, or a switch
+away from ChatGPT auth clears it. Unchanged active reads update server freshness without sending a
+provider snapshot every 30 seconds; the coordinator broadcasts freshness at least every five
+minutes. The provider snapshot stream carries updates to local and remote web/desktop clients;
+clients never contact the Codex app server directly.
+Rate limits are deliberately excluded from server and client configuration caches, so a restart
+must revalidate the current account before the UI can display them.
+
 ## How provider work is requested
 
 Clients never call a provider directly. They dispatch orchestration commands over the RPC method

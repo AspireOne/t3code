@@ -61,6 +61,19 @@ export const ServerProviderAuth = Schema.Struct({
 });
 export type ServerProviderAuth = typeof ServerProviderAuth.Type;
 
+export const ServerProviderRateLimitWindow = Schema.Struct({
+  windowDurationMins: PositiveInt,
+  usedPercent: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
+  resetsAt: IsoDateTime,
+});
+export type ServerProviderRateLimitWindow = typeof ServerProviderRateLimitWindow.Type;
+
+export const ServerProviderRateLimits = Schema.Struct({
+  fetchedAt: IsoDateTime,
+  windows: Schema.Array(ServerProviderRateLimitWindow),
+});
+export type ServerProviderRateLimits = typeof ServerProviderRateLimits.Type;
+
 export const ServerProviderModel = Schema.Struct({
   slug: TrimmedNonEmptyString,
   name: TrimmedNonEmptyString,
@@ -176,6 +189,8 @@ export const ServerProvider = Schema.Struct({
   version: Schema.NullOr(TrimmedNonEmptyString),
   status: ServerProviderState,
   auth: ServerProviderAuth,
+  /** Account-level timed quotas, currently reported by ChatGPT-authenticated Codex instances. */
+  rateLimits: Schema.optionalKey(ServerProviderRateLimits),
   checkedAt: IsoDateTime,
   message: Schema.optional(TrimmedNonEmptyString),
   // Optional for back-compat: every legacy producer omits this field and

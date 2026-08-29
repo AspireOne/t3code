@@ -80,7 +80,18 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-provider-cache-" });
-      const codexProvider = makeProvider(CODEX_DRIVER);
+      const codexProvider = makeProvider(CODEX_DRIVER, {
+        rateLimits: {
+          fetchedAt: "2026-04-11T00:00:00.000Z",
+          windows: [
+            {
+              windowDurationMins: 300,
+              usedPercent: 40,
+              resetsAt: "2026-04-11T05:00:00.000Z",
+            },
+          ],
+        },
+      });
       const claudeProvider = makeProvider(CLAUDE_AGENT_DRIVER, {
         status: "warning",
         auth: { status: "unknown" },
@@ -115,7 +126,8 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
         provider: openCodeProvider,
       });
 
-      assert.deepStrictEqual(yield* readProviderStatusCache(codexPath), codexProvider);
+      const { rateLimits: _rateLimits, ...persistentCodexProvider } = codexProvider;
+      assert.deepStrictEqual(yield* readProviderStatusCache(codexPath), persistentCodexProvider);
       assert.deepStrictEqual(yield* readProviderStatusCache(claudePath), claudeProvider);
       assert.deepStrictEqual(yield* readProviderStatusCache(openCodePath), openCodeProvider);
     }),
@@ -133,6 +145,16 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
         },
       ],
       message: "Cached message",
+      rateLimits: {
+        fetchedAt: "2026-04-10T12:00:00.000Z",
+        windows: [
+          {
+            windowDurationMins: 300,
+            usedPercent: 40,
+            resetsAt: "2026-04-10T17:00:00.000Z",
+          },
+        ],
+      },
       skills: [
         {
           name: "github:gh-fix-ci",

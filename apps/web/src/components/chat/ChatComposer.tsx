@@ -9,6 +9,7 @@ import type {
   RuntimeMode,
   ScopedThreadRef,
   ServerProvider,
+  ServerProviderRateLimits,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -438,7 +439,9 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
 
 const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
   compact: boolean;
+  usageCompact: boolean;
   activeContextWindow: ContextWindowSnapshot | null;
+  providerRateLimits: ServerProviderRateLimits | null;
   activeThreadModelDisplayName: string | null;
   isPreparingWorktree: boolean;
   pendingAction: {
@@ -467,9 +470,11 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
 }) {
   return (
     <>
-      {props.activeContextWindow ? (
+      {props.activeContextWindow || props.providerRateLimits ? (
         <ContextWindowMeter
           usage={props.activeContextWindow}
+          rateLimits={props.providerRateLimits ?? undefined}
+          compact={props.usageCompact}
           modelDisplayName={props.activeThreadModelDisplayName}
           onCompact={props.onCompactContext}
           compactDisabled={props.compactDisabled}
@@ -946,6 +951,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     () => selectedProviderEntry?.snapshot ?? null,
     [selectedProviderEntry],
   );
+  const selectedCodexRateLimits =
+    selectedProvider === "codex" ? (selectedProviderStatus?.rateLimits ?? null) : null;
   const selectedProviderModels = useMemo<ReadonlyArray<ServerProvider["models"][number]>>(
     () => selectedProviderEntry?.models ?? [],
     [selectedProviderEntry],
@@ -3557,7 +3564,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   {showMobilePendingAnswerActions ? null : inlineStashBadge}
                   <ComposerFooterPrimaryActions
                     compact={isComposerPrimaryActionsCompact}
+                    usageCompact={isComposerFooterCompact}
                     activeContextWindow={activeContextWindow}
+                    providerRateLimits={selectedCodexRateLimits}
                     activeThreadModelDisplayName={activeThreadModelDisplayName}
                     pendingAction={pendingPrimaryAction}
                     isRunning={phase === "running"}

@@ -65,6 +65,7 @@ import {
 } from "./CodexSessionRuntime.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
+import type { CodexRateLimitCoordinatorShape } from "../CodexRateLimitCoordinator.ts";
 const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerProcessExitedError);
 const isCodexAppServerTransportError = Schema.is(CodexErrors.CodexAppServerTransportError);
 const isCodexSessionRuntimeThreadIdMissingError = Schema.is(
@@ -86,6 +87,7 @@ export interface CodexAdapterLiveOptions {
   >;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
+  readonly rateLimitCoordinator?: CodexRateLimitCoordinatorShape;
 }
 
 interface CodexAdapterSessionContext {
@@ -1707,6 +1709,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                   'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
                 ],
               }
+            : {}),
+          ...(options?.rateLimitCoordinator
+            ? { rateLimitCoordinator: options.rateLimitCoordinator }
             : {}),
         };
         const sessionScope = yield* Scope.make("sequential");

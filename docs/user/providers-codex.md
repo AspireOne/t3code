@@ -28,6 +28,19 @@ Log in with Codex normally:
 codex login
 ```
 
+## Check account limits
+
+When the selected Codex provider uses a ChatGPT account, the web and desktop message composer shows
+the remaining five-hour and weekly limits beside the context-window ring. Hover or select this
+combined usage control to see reset times and separate progress bars. The labels collapse to an
+icon when the composer is narrow.
+
+Limits belong to the selected Codex provider instance, so work and personal accounts report their
+own usage. T3 Code refreshes them while work is running and periodically while idle. If Codex cannot
+return a fresh value, the last successful value remains visible and is marked as potentially stale.
+This fallback lasts only for the current server session; account limits are revalidated after a
+restart. API-key Codex setups do not show account limits.
+
 ## Send feedback to OpenAI
 
 In an existing Codex thread, send `/feedback` or `/feedback` followed by a description of the

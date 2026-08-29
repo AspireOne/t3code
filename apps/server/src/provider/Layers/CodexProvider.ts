@@ -34,6 +34,7 @@ import {
 } from "../providerSnapshot.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import packageJson from "../../../package.json" with { type: "json" };
+import { normalizeCodexRateLimits } from "../CodexRateLimits.ts";
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
 
 const CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER = "2 seconds" as const;
@@ -45,6 +46,7 @@ const CODEX_PRESENTATION = {
 
 export interface CodexAppServerProviderSnapshot {
   readonly account: CodexSchema.V2GetAccountResponse;
+  readonly rateLimits?: CodexSchema.V2GetAccountRateLimitsResponse;
   readonly version: string | undefined;
   readonly models: ReadonlyArray<ServerProviderModel>;
   readonly skills: ReadonlyArray<ServerProviderSkill>;
@@ -389,18 +391,31 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
     } satisfies CodexAppServerProviderSnapshot;
   }
 
-  const [skillsResponse, models] = yield* Effect.all(
+  const readRateLimits =
+    accountResponse.account?.type === "chatgpt"
+      ? client.request("account/rateLimits/read", undefined).pipe(
+          Effect.timeoutOption("2 seconds"),
+          Effect.catch((cause) =>
+            Effect.logDebug("Codex account rate-limit probe failed.", { cause }).pipe(
+              Effect.as(Option.none<CodexSchema.V2GetAccountRateLimitsResponse>()),
+            ),
+          ),
+        )
+      : Effect.succeed(Option.none<CodexSchema.V2GetAccountRateLimitsResponse>());
+  const [skillsResponse, models, rateLimits] = yield* Effect.all(
     [
       client.request("skills/list", {
         cwds: [input.cwd],
       }),
       requestAllCodexModels(client),
+      readRateLimits,
     ],
     { concurrency: "unbounded" },
   );
 
   return {
     account: accountResponse,
+    ...(Option.isSome(rateLimits) ? { rateLimits: rateLimits.value } : {}),
     version,
     models: applyPreferredCodexDefaultModel(
       appendCustomCodexModels(models, input.customModels ?? []),
@@ -588,6 +603,12 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
 
   const snapshot = probeResult.success.value;
   const accountStatus = accountProbeStatus(snapshot.account);
+  const rateLimits = snapshot.rateLimits
+    ? (normalizeCodexRateLimits(snapshot.rateLimits, checkedAt) ?? {
+        fetchedAt: checkedAt,
+        windows: [],
+      })
+    : undefined;
 
   return buildServerProvider({
     presentation: CODEX_PRESENTATION,
@@ -595,6 +616,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     checkedAt,
     models: snapshot.models,
     skills: snapshot.skills,
+    ...(rateLimits ? { rateLimits } : {}),
     slashCommands: [
       {
         name: "feedback",
