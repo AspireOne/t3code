@@ -34,9 +34,12 @@ import {
   threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
 import {
+  codexCompactionMessage,
   codexFeedbackMessage,
+  hasCodexCompactionTerminalActivity,
   parseCodexFeedbackCommand,
   submitCodexFeedback,
+  type CodexCompactionSubmission,
   type CodexFeedbackSubmission,
 } from "@t3tools/client-runtime/state/threads";
 import {
@@ -1428,6 +1431,11 @@ function ChatViewContent(props: ChatViewProps) {
   const [feedbackSubmissionsByThreadKey, setFeedbackSubmissionsByThreadKey] = useState<
     Record<string, ReadonlyArray<CodexFeedbackSubmission>>
   >({});
+  const [compactionSubmissionsByThreadKey, setCompactionSubmissionsByThreadKey] = useState<
+    Record<string, CodexCompactionSubmission | undefined>
+  >({});
+  const compactionSubmission = compactionSubmissionsByThreadKey[routeThreadKey];
+  const compactionSubmitting = compactionSubmission?.status === "compacting";
   const feedbackSubmissions = useMemo(
     () => feedbackSubmissionsByThreadKey[routeThreadKey] ?? [],
     [feedbackSubmissionsByThreadKey, routeThreadKey],
@@ -1498,6 +1506,7 @@ function ChatViewContent(props: ChatViewProps) {
   const attachmentPreviewPromotionInFlightByMessageIdRef = useRef<Record<string, true>>({});
   const sendInFlightRef = useRef(false);
   const feedbackUploadsInFlightRef = useRef(new Set<string>());
+  const compactionRequestsInFlightRef = useRef(new Set<string>());
   const terminalUiOpenByThreadRef = useRef<Record<string, boolean>>({});
 
   const terminalUiState = useTerminalUiStateStore((state) =>
@@ -2308,6 +2317,18 @@ function ChatViewContent(props: ChatViewProps) {
     [threadActivities],
   );
   const workLogEntries = useMemo(() => deriveWorkLogEntries(threadActivities), [threadActivities]);
+  useEffect(() => {
+    if (!compactionSubmission || compactionSubmission.status !== "compacting") return;
+    if (!hasCodexCompactionTerminalActivity(compactionSubmission, threadActivities)) return;
+
+    compactionRequestsInFlightRef.current.delete(routeThreadKey);
+    setCompactionSubmissionsByThreadKey((current) => {
+      if (current[routeThreadKey]?.id !== compactionSubmission.id) return current;
+      const next = { ...current };
+      delete next[routeThreadKey];
+      return next;
+    });
+  }, [compactionSubmission, routeThreadKey, threadActivities]);
   const turnPlans = useMemo(() => deriveTurnPlans(threadActivities), [threadActivities]);
   // Native subagent fold: memoized by activity-list identity, shared by the
   // Agents surface, live strip, and workflow cards. v2Projection is null
@@ -2651,6 +2672,12 @@ function ChatViewContent(props: ChatViewProps) {
 
     const localMessages = [
       ...optimisticUserMessages,
+      ...(compactionSubmission
+        ? [
+            codexCompactionMessage(compactionSubmission),
+            codexCompactionMessage(compactionSubmission, "assistant"),
+          ]
+        : []),
       ...feedbackSubmissions.flatMap((submission) =>
         submission.status === "interrupted"
           ? []
@@ -2668,6 +2695,7 @@ function ChatViewContent(props: ChatViewProps) {
     return [...serverMessagesWithPreviewHandoff, ...pendingMessages];
   }, [
     attachmentPreviewHandoffByMessageId,
+    compactionSubmission,
     displayServerMessages,
     feedbackSubmissions,
     optimisticUserMessages,
@@ -4861,6 +4889,7 @@ function ChatViewContent(props: ChatViewProps) {
     isPreparingWorktree ||
     activeEnvironmentUnavailable ||
     feedbackUploading ||
+    compactionSubmitting ||
     pendingApprovals.length > 0 ||
     pendingUserInputs.length > 0 ||
     showPlanFollowUpPrompt ||
@@ -5411,6 +5440,7 @@ function ChatViewContent(props: ChatViewProps) {
       isConnecting ||
       threadDetailLoading ||
       sendInFlightRef.current ||
+      compactionRequestsInFlightRef.current.has(routeThreadKey) ||
       feedbackUploadsInFlightRef.current.has(routeThreadKey)
     ) {
       notifyDirectAnnotationAttached();
@@ -5560,26 +5590,56 @@ function ChatViewContent(props: ChatViewProps) {
         );
         return;
       }
+      const submission = {
+        id: newMessageId(),
+        command: trimmed,
+        createdAt: new Date().toISOString(),
+        status: "compacting",
+      } satisfies CodexCompactionSubmission;
+      compactionRequestsInFlightRef.current.add(routeThreadKey);
+      setCompactionSubmissionsByThreadKey((current) => ({
+        ...current,
+        [routeThreadKey]: submission,
+      }));
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+      scrollToEnd();
+
       const result = await compactThread({
         environmentId,
         input: { threadId: activeThread.id },
       });
       if (result._tag === "Failure") {
+        compactionRequestsInFlightRef.current.delete(routeThreadKey);
         if (!isAtomCommandInterrupted(result)) {
           const error = squashAtomCommandFailure(result);
+          const errorMessage = error instanceof Error ? error.message : "Try again.";
+          setCompactionSubmissionsByThreadKey((current) => ({
+            ...current,
+            [routeThreadKey]: {
+              ...submission,
+              status: "failed",
+              errorMessage,
+            },
+          }));
           toastManager.add(
             stackedThreadToast({
               type: "error",
               title: "Could not compact context",
-              description: error instanceof Error ? error.message : "Try again.",
+              description: errorMessage,
             }),
           );
+        } else {
+          setCompactionSubmissionsByThreadKey((current) => {
+            if (current[routeThreadKey]?.id !== submission.id) return current;
+            const next = { ...current };
+            delete next[routeThreadKey];
+            return next;
+          });
         }
         return;
       }
-      promptRef.current = "";
-      clearComposerDraftContent(composerDraftTarget);
-      composerRef.current?.resetCursorState();
       return;
     }
     if (feedbackCommand) {
@@ -7189,11 +7249,13 @@ function ChatViewContent(props: ChatViewProps) {
                             isConnecting={isConnecting}
                             isSendBusy={isSendBusy}
                             sendDisabledReason={
-                              feedbackUploading
-                                ? "Sending feedback"
-                                : threadDetailLoading
-                                  ? "Messages loading"
-                                  : null
+                              compactionSubmitting
+                                ? "Compacting context"
+                                : feedbackUploading
+                                  ? "Sending feedback"
+                                  : threadDetailLoading
+                                    ? "Messages loading"
+                                    : null
                             }
                             isPreparingWorktree={isPreparingWorktree}
                             externalDrawerAttached={externalComposerDrawerAttached}

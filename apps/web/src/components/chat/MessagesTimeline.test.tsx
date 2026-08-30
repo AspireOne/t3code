@@ -1,5 +1,8 @@
 import { CheckpointRef, EnvironmentId, MessageId, TurnId } from "@t3tools/contracts";
-import { codexFeedbackMessage } from "@t3tools/client-runtime/state/threads";
+import {
+  codexCompactionMessage,
+  codexFeedbackMessage,
+} from "@t3tools/client-runtime/state/threads";
 import { createRef, type ReactNode, type Ref } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vite-plus/test";
@@ -237,6 +240,33 @@ function buildAssistantTimelineEntry(text: string) {
 }
 
 describe("MessagesTimeline", () => {
+  it("renders a compaction command and its progress as normal thread messages", () => {
+    const submission = {
+      id: MessageId.make("compact-command"),
+      command: "/compact",
+      createdAt: MESSAGE_CREATED_AT,
+      status: "compacting" as const,
+    };
+    const messages = [
+      codexCompactionMessage(submission),
+      codexCompactionMessage(submission, "assistant"),
+    ];
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={messages.map((message) => ({
+          id: message.id,
+          kind: "message" as const,
+          createdAt: message.createdAt,
+          message,
+        }))}
+      />,
+    );
+
+    expect(markup).toContain("/compact");
+    expect(markup).toContain("Compacting context...");
+  });
+
   it("renders a feedback command and its pending response as normal thread messages", () => {
     const submission = {
       id: MessageId.make("feedback-command"),

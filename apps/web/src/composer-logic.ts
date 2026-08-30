@@ -11,6 +11,10 @@ export function isStandaloneForkCommand(text: string): boolean {
 export function isStandaloneCompactCommand(text: string): boolean {
   return text.trim().toLowerCase() === "/compact";
 }
+
+export function composerThreadActionCommandReplacement(command: "compact" | "fork"): string {
+  return `/${command} `;
+}
 export type ComposerSubmissionIntent = "foreground" | "background";
 
 export interface ComposerTrigger {

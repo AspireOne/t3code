@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   clampCollapsedComposerCursor,
   collapseExpandedComposerCursor,
+  composerThreadActionCommandReplacement,
   composerSubmissionIntentForEnter,
   detectComposerTrigger,
   expandCollapsedComposerCursor,
@@ -423,6 +424,16 @@ describe("isStandaloneCompactCommand", () => {
     expect(isStandaloneCompactCommand("  /CoMpAcT\n")).toBe(true);
     expect(isStandaloneCompactCommand("/compact now")).toBe(false);
     expect(isStandaloneCompactCommand("please /compact")).toBe(false);
+  });
+});
+
+describe("composerThreadActionCommandReplacement", () => {
+  it("adds the trailing space that dismisses slash autocomplete", () => {
+    for (const command of ["compact", "fork"] as const) {
+      const replacement = composerThreadActionCommandReplacement(command);
+      expect(replacement).toBe(`/${command} `);
+      expect(detectComposerTrigger(replacement, replacement.length)).toBeNull();
+    }
   });
 });
 

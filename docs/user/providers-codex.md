@@ -50,9 +50,9 @@ and share with OpenAI employees.
 ## Reduce context usage
 
 In an idle, existing Codex thread, send `/compact` by itself or use the compact action beside the
-context-window meter. T3 Code asks Codex to compact the thread natively, so the command does not
-appear as a chat message. The action is available in the web and desktop apps; mobile does not
-currently offer manual Codex compaction.
+context-window meter. T3 Code shows the command and its progress while asking Codex to compact the
+thread natively, then records the result in the work log. The action is available in the web and
+desktop apps; mobile does not currently offer manual Codex compaction.
 
 ## Fork a conversation
 

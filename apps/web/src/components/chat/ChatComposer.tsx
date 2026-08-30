@@ -41,6 +41,7 @@ import {
   type ComposerTrigger,
   collapseExpandedComposerCursor,
   composerSubmissionIntentForEnter,
+  composerThreadActionCommandReplacement,
   detectComposerTrigger,
   expandCollapsedComposerCursor,
   replaceTextRange,
@@ -1874,15 +1875,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           }
           return;
         }
-        if (item.command === "compact") {
-          const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "/compact", {
-            expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
-          });
-          if (applied) setComposerHighlightedItemId(null);
-          return;
-        }
-        if (item.command === "fork") {
-          const replacement = "/fork ";
+        if (item.command === "compact" || item.command === "fork") {
+          const replacement = composerThreadActionCommandReplacement(item.command);
           const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
             snapshot.value,
             trigger.rangeEnd,
