@@ -879,6 +879,14 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         isDefaultRef: false,
         refName: null,
         hasWorkingTreeChanges: false,
+        changeCounts: {
+          conflicted: 0,
+          staged: 0,
+          unstaged: 0,
+          deleted: 0,
+          renamed: 0,
+          untracked: 0,
+        },
         workingTree: {
           files: [],
           insertions: 0,
@@ -909,6 +917,14 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         isDefaultRef: false,
         refName: null,
         hasWorkingTreeChanges: false,
+        changeCounts: {
+          conflicted: 0,
+          staged: 0,
+          unstaged: 0,
+          deleted: 0,
+          renamed: 0,
+          untracked: 0,
+        },
         workingTree: {
           files: [],
           insertions: 0,
