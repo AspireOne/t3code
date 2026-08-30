@@ -91,6 +91,7 @@ import {
   collapseExpandedComposerCursor,
   type ComposerSubmissionIntent,
   isStandaloneCompactCommand,
+  isStandaloneForkCommand,
   parseStandaloneComposerSlashCommand,
 } from "../composer-logic";
 import {
@@ -272,6 +273,7 @@ import {
 import { vcsEnvironment } from "../state/vcs";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
+  readThreadCanFork,
   useProject,
   useProjects,
   useThread,
@@ -1275,7 +1277,7 @@ function ChatViewContent(props: ChatViewProps) {
   const threadSyncPhase = routeKind === "server" ? (props.threadSyncPhase ?? null) : null;
   const threadDetailLoading = threadSyncPhase === "loading";
   const handleNewThread = useNewThreadHandler();
-  const { settleThread, pinThread, confirmAndUnpinThread } = useThreadActions();
+  const { settleThread, pinThread, confirmAndUnpinThread, forkThread } = useThreadActions();
   const routeThreadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
     [environmentId, threadId],
@@ -5493,6 +5495,42 @@ function ChatViewContent(props: ChatViewProps) {
       composerReviewComments.length === 0
         ? parseCodexFeedbackCommand(trimmed)
         : null;
+    if (ctxSelectedProvider === "codex" && isStandaloneForkCommand(trimmed)) {
+      const hasExtraContext =
+        composerImages.length > 0 ||
+        composerTerminalContexts.length > 0 ||
+        composerElementContexts.length > 0 ||
+        composerPreviewAnnotations.length > 0 ||
+        composerReviewComments.length > 0;
+      if (hasExtraContext) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "warning",
+            title: "Remove attached context first",
+            description: "/fork must be submitted by itself.",
+          }),
+        );
+        return;
+      }
+      const result = await forkThread(routeThreadRef);
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not fork thread",
+              description: error instanceof Error ? error.message : "Try again.",
+            }),
+          );
+        }
+        return;
+      }
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+      return;
+    }
     if (ctxSelectedProvider === "codex" && isStandaloneCompactCommand(trimmed)) {
       if (!supportsThreadCompaction) {
         toastManager.add(
@@ -7185,6 +7223,9 @@ function ChatViewContent(props: ChatViewProps) {
                             compactDisabled={compactDisabled}
                             compactDisabledReason={compactDisabledReason}
                             supportsNativeCompaction={supportsThreadCompaction}
+                            canForkThread={
+                              routeKind === "server" && readThreadCanFork(routeThreadRef)
+                            }
                             onNativeCompact={() => {
                               promptRef.current = "/compact";
                               setComposerDraftPrompt(composerDraftTarget, "/compact");

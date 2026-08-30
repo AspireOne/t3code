@@ -8,6 +8,7 @@ import {
   expandCollapsedComposerCursor,
   isCollapsedCursorAdjacentToInlineToken,
   isStandaloneCompactCommand,
+  isStandaloneForkCommand,
   parseStandaloneComposerSlashCommand,
   replaceTextRange,
 } from "./composer-logic";
@@ -422,5 +423,13 @@ describe("isStandaloneCompactCommand", () => {
     expect(isStandaloneCompactCommand("  /CoMpAcT\n")).toBe(true);
     expect(isStandaloneCompactCommand("/compact now")).toBe(false);
     expect(isStandaloneCompactCommand("please /compact")).toBe(false);
+  });
+});
+
+describe("isStandaloneForkCommand", () => {
+  it("accepts only a standalone fork command", () => {
+    expect(isStandaloneForkCommand("  /FoRk\n")).toBe(true);
+    expect(isStandaloneForkCommand("/fork now")).toBe(false);
+    expect(isStandaloneForkCommand("please /fork")).toBe(false);
   });
 });

@@ -625,6 +625,7 @@ export interface ChatComposerProps {
   compactDisabled: boolean;
   compactDisabledReason: string | null;
   supportsNativeCompaction: boolean;
+  canForkThread: boolean;
 
   // Misc
   resolvedTheme: "light" | "dark";
@@ -721,6 +722,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     compactDisabled,
     compactDisabledReason,
     supportsNativeCompaction,
+    canForkThread,
     resolvedTheme,
     settings,
     keybindings,
@@ -1174,6 +1176,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               },
             ] as const)
           : []),
+        ...(selectedProvider === "codex" && canForkThread
+          ? ([
+              {
+                id: "slash:fork",
+                type: "slash-command",
+                command: "fork",
+                label: "/fork",
+                description: "Fork this thread through its latest completed turn",
+              },
+            ] as const)
+          : []),
         ...(planModeUiEnabled
           ? ([
               {
@@ -1244,6 +1257,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }
     return [];
   }, [
+    canForkThread,
     composerTrigger,
     planModeUiEnabled,
     selectedProvider,
@@ -1864,6 +1878,22 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "/compact", {
             expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
           });
+          if (applied) setComposerHighlightedItemId(null);
+          return;
+        }
+        if (item.command === "fork") {
+          const replacement = "/fork ";
+          const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+            snapshot.value,
+            trigger.rangeEnd,
+            replacement,
+          );
+          const applied = applyPromptReplacement(
+            trigger.rangeStart,
+            replacementRangeEnd,
+            replacement,
+            { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
+          );
           if (applied) setComposerHighlightedItemId(null);
           return;
         }

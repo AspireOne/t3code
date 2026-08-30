@@ -56,8 +56,8 @@ currently offer manual Codex compaction.
 
 ## Fork a conversation
 
-In the web or desktop app, open an idle Codex thread's menu and choose **Fork thread**, or run
-**Fork current thread** from the command palette. T3 Code creates a second thread containing the
+In the web or desktop app, enter `/fork`, open an idle Codex thread's menu and choose **Fork
+thread**, or run **Fork current thread** from the command palette. T3 Code creates a second thread containing the
 conversation through the latest completed turn and opens it immediately. The original and fork are
 independent after that point.
 
