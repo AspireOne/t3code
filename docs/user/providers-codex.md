@@ -54,6 +54,18 @@ context-window meter. T3 Code asks Codex to compact the thread natively, so the 
 appear as a chat message. The action is available in the web and desktop apps; mobile does not
 currently offer manual Codex compaction.
 
+## Fork a conversation
+
+In the web or desktop app, open an idle Codex thread's menu and choose **Fork thread**, or run
+**Fork current thread** from the command palette. T3 Code creates a second thread containing the
+conversation through the latest completed turn and opens it immediately. The original and fork are
+independent after that point.
+
+Forking uses Codex's native conversation fork, so it is available only after at least one turn has
+completed and while no turn or approval is pending. Other providers and the mobile app do not
+currently offer this action. The `chat.fork` keybinding command has no default shortcut; assign one
+under **Settings → Keybindings** if wanted.
+
 ## Sub-agent models
 
 The web and desktop Agents panel shows each sub-agent's model and reasoning effort when Codex

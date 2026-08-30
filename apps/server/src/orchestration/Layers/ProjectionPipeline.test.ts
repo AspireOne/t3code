@@ -327,6 +327,153 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
   );
 });
 
+it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-fork-")))(
+  "OrchestrationProjectionPipeline thread forks",
+  (it) => {
+    it.effect("materializes independent message and turn history for the target", () =>
+      Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const now = "2026-01-01T00:00:00.000Z";
+        const sourceThreadId = ThreadId.make("thread-fork-source");
+        const targetThreadId = ThreadId.make("thread-fork-target");
+        const turnId = TurnId.make("turn-fork-1");
+        const sourceMessageId = MessageId.make("message-fork-source");
+
+        yield* eventStore.append({
+          type: "thread.created",
+          eventId: EventId.make("evt-fork-source-created"),
+          aggregateKind: "thread",
+          aggregateId: sourceThreadId,
+          occurredAt: now,
+          commandId: CommandId.make("cmd-fork-source-created"),
+          causationEventId: null,
+          correlationId: CommandId.make("cmd-fork-source-created"),
+          metadata: {},
+          payload: {
+            threadId: sourceThreadId,
+            projectId: ProjectId.make("project-fork"),
+            title: "Source",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("codex"),
+              model: "gpt-5-codex",
+            },
+            runtimeMode: "full-access",
+            branch: "main",
+            worktreePath: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+        yield* eventStore.append({
+          type: "thread.message-sent",
+          eventId: EventId.make("evt-fork-source-message"),
+          aggregateKind: "thread",
+          aggregateId: sourceThreadId,
+          occurredAt: now,
+          commandId: CommandId.make("cmd-fork-source-message"),
+          causationEventId: null,
+          correlationId: CommandId.make("cmd-fork-source-message"),
+          metadata: {},
+          payload: {
+            threadId: sourceThreadId,
+            messageId: sourceMessageId,
+            role: "assistant",
+            text: "source history",
+            attachments: [],
+            turnId,
+            streaming: false,
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+        yield* projectionPipeline.bootstrap;
+
+        yield* sql`
+          UPDATE projection_threads SET latest_turn_id = ${turnId}
+          WHERE thread_id = ${sourceThreadId}
+        `;
+
+        yield* eventStore.append({
+          type: "thread.forked",
+          eventId: EventId.make("evt-thread-forked"),
+          aggregateKind: "thread",
+          aggregateId: targetThreadId,
+          occurredAt: now,
+          commandId: CommandId.make("cmd-thread-forked"),
+          causationEventId: null,
+          correlationId: CommandId.make("cmd-thread-forked"),
+          metadata: {},
+          payload: {
+            sourceThreadId,
+            threadId: targetThreadId,
+            projectId: ProjectId.make("project-fork"),
+            title: "Source (fork)",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("codex"),
+              model: "gpt-5-codex",
+            },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: "main",
+            worktreePath: null,
+            forkedThroughTurnId: turnId,
+            latestTurn: {
+              turnId,
+              state: "completed",
+              requestedAt: now,
+              startedAt: now,
+              completedAt: now,
+              assistantMessageId: sourceMessageId,
+            },
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+        yield* projectionPipeline.bootstrap;
+
+        const messages = yield* sql<{
+          readonly messageId: string;
+          readonly threadId: string;
+          readonly text: string;
+        }>`
+          SELECT message_id AS "messageId", thread_id AS "threadId", text
+          FROM projection_thread_messages
+          WHERE thread_id IN (${sourceThreadId}, ${targetThreadId})
+          ORDER BY thread_id
+        `;
+        assert.equal(messages.length, 2);
+        const sourceMessage = messages.find((message) => message.threadId === sourceThreadId);
+        const targetMessage = messages.find((message) => message.threadId === targetThreadId);
+        assert.equal(targetMessage?.text, "source history");
+        assert.notEqual(targetMessage?.messageId, sourceMessage?.messageId);
+
+        const targetTurns = yield* sql<{
+          readonly turnId: string;
+          readonly assistantMessageId: string | null;
+        }>`
+          SELECT turn_id AS "turnId", assistant_message_id AS "assistantMessageId"
+          FROM projection_turns
+          WHERE thread_id = ${targetThreadId}
+        `;
+        assert.deepEqual(targetTurns, [
+          { turnId, assistantMessageId: targetMessage?.messageId ?? null },
+        ]);
+
+        yield* sql`
+          UPDATE projection_thread_messages SET text = 'target-only change'
+          WHERE thread_id = ${targetThreadId}
+        `;
+        const sourceRows = yield* sql<{ readonly text: string }>`
+          SELECT text FROM projection_thread_messages WHERE thread_id = ${sourceThreadId}
+        `;
+        assert.deepEqual(sourceRows, [{ text: "source history" }]);
+      }),
+    );
+  },
+);
+
 it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-base-")))(
   "OrchestrationProjectionPipeline",
   (it) => {

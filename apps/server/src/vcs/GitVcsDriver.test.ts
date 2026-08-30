@@ -7,9 +7,10 @@ import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { assert, it } from "@effect/vitest";
 
-import { GitCommandError } from "@t3tools/contracts";
+import { CheckpointRef, GitCommandError } from "@t3tools/contracts";
 import * as ServerConfig from "../config.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
+import * as VcsDriver from "./VcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
 import { runVcsDriverContractSuite } from "./testing/VcsDriverContractHarness.ts";
 
@@ -64,6 +65,44 @@ runVcsDriverContractSuite<GitVcsDriver.GitVcsDriver, GitContractError>({
       }),
   },
 });
+
+it.effect("GitVcsDriver copies a checkpoint ref to an independent target ref", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const driver = yield* VcsDriver.VcsDriver;
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-copy-checkpoint-" });
+      const sourceRef = CheckpointRef.make("refs/t3/checkpoints/source/turn/0");
+      const targetRef = CheckpointRef.make("refs/t3/checkpoints/target/turn/0");
+
+      yield* runGit(cwd, ["init"]);
+      yield* runGit(cwd, ["config", "user.email", "test@test.com"]);
+      yield* runGit(cwd, ["config", "user.name", "Test"]);
+      yield* fileSystem.writeFileString(path.join(cwd, "tracked.txt"), "baseline\n");
+      yield* runGit(cwd, ["add", "tracked.txt"]);
+      yield* runGit(cwd, ["commit", "-m", "baseline"]);
+      yield* runGit(cwd, ["update-ref", sourceRef, "HEAD"]);
+
+      const copyCheckpointRef = driver.checkpoints?.copyCheckpointRef;
+      assert.ok(copyCheckpointRef);
+      const copied = yield* copyCheckpointRef({
+        cwd,
+        sourceCheckpointRef: sourceRef,
+        targetCheckpointRef: targetRef,
+      });
+      const resolved = yield* driver.execute({
+        operation: "GitVcsDriver.test.resolveCopiedCheckpoint",
+        cwd,
+        args: ["rev-parse", sourceRef, targetRef],
+      });
+
+      assert.strictEqual(copied, true);
+      const [sourceOid, targetOid] = resolved.stdout.trim().split("\n");
+      assert.strictEqual(targetOid, sourceOid);
+    }),
+  ).pipe(Effect.provide(GitContractLayer)),
+);
 
 it.effect("GitVcsDriver forwards execute env to the VCS process", () => {
   let observedEnv: NodeJS.ProcessEnv | undefined;

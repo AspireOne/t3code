@@ -39,6 +39,21 @@ directory to route session and turn operations for a thread, so callers name a t
 Adding a driver means writing the driver plus adapter and adding it to `BUILT_IN_DRIVERS`. No
 orchestration, contract, or client change is required for the common case.
 
+## Native thread forks
+
+`thread.fork` is currently a Codex-only provider-shaped operation. The WebSocket command handler
+first copies target-owned attachment files and checkpoint refs, then asks `ProviderService` to call
+the Codex adapter's native `thread/fork` through a short-lived app-server runtime. Only after that
+succeeds does it persist the compact `thread.forked` event. A failure before persistence deletes the
+native fork, provider binding, copied refs, and copied files.
+
+The projection pipeline materializes the target's thread shell, messages, activities, proposed
+plans, and turns from the source when `thread.forked` is applied. Entity IDs and checkpoint refs are
+target-specific, while provider turn IDs remain unchanged so Codex and T3 agree on the fork point.
+The command is accepted only at the latest completed turn with no active session, queued turn, or
+pending approval/input. This makes the whole retained history the cutoff and keeps the event small
+and replayable without embedding a conversation snapshot in the event log.
+
 ## OpenCode server ownership and catalog
 
 Each OpenCode provider instance owns one lazy local server for catalog discovery and

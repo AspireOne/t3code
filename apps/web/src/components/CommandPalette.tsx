@@ -65,6 +65,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useThreadActions } from "../hooks/useThreadActions";
 import { useClientSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
 import { readLocalApi } from "../localApi";
@@ -76,7 +77,7 @@ import { sourceControlEnvironment } from "../state/sourceControl";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
-import { useProjects, useThreadShells } from "../state/entities";
+import { readThreadCanFork, useProjects, useThreadShells } from "../state/entities";
 import { useThreadSearch } from "../state/queries";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
@@ -587,6 +588,7 @@ function OpenCommandPaletteDialog(props: {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
+  const { forkThread } = useThreadActions();
   const projects = useProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
@@ -878,6 +880,19 @@ function OpenCommandPaletteDialog(props: {
   );
 
   const activeThreadId = activeThread?.id;
+  const activeThreadProvider = activeThread
+    ? (providerEntryByEnvironmentAndInstanceId.get(
+        `${activeThread.environmentId}:${activeThread.session?.providerInstanceId ?? activeThread.modelSelection.instanceId}`,
+      ) ?? null)
+    : null;
+  const activeThreadEnvironment = activeThread
+    ? (environments.find(
+        (environment) => environment.environmentId === activeThread.environmentId,
+      ) ?? null)
+    : null;
+  const activeThreadForkSupported =
+    activeThreadProvider?.driverKind === "codex" &&
+    activeThreadEnvironment?.serverConfig?.environment.capabilities.threadForking === true;
   const currentProjectEnvironmentId =
     activeThread?.environmentId ?? activeDraftThread?.environmentId ?? null;
   const currentProjectId = activeThread?.projectId ?? activeDraftThread?.projectId ?? null;
@@ -1522,6 +1537,32 @@ function OpenCommandPaletteDialog(props: {
       icon: <SquarePenIcon className={ITEM_ICON_CLASS} />,
       addonIcon: <SquarePenIcon className={ADDON_ICON_CLASS} />,
       groups: [{ value: "projects", label: "Projects", items: projectThreadItems }],
+    });
+  }
+
+  if (activeThread && activeThreadForkSupported) {
+    const activeThreadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
+    actionItems.push({
+      kind: "action",
+      value: "action:fork-thread",
+      searchTerms: ["fork thread", "branch chat", "duplicate conversation"],
+      title: "Fork current thread",
+      icon: <MessageSquareIcon className={ITEM_ICON_CLASS} />,
+      disabled: !readThreadCanFork(activeThreadRef),
+      shortcutCommand: "chat.fork",
+      run: async () => {
+        const result = await forkThread(activeThreadRef);
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to fork thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      },
     });
   }
 

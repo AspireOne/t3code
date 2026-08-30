@@ -8,9 +8,16 @@ const baseState: ThreadActionMenuState = {
   isSettled: false,
   isSnoozed: false,
   canSnoozeNow: true,
+  canFork: true,
   isRegeneratingTitle: false,
   isRunning: false,
-  supports: { settlement: true, snooze: true, pinning: true, titleRegeneration: true },
+  supports: {
+    settlement: true,
+    snooze: true,
+    pinning: true,
+    titleRegeneration: true,
+    forking: true,
+  },
   snoozePresets: [
     { id: "hour", label: "In 1 hour", whenLabel: "3:00 PM", snoozedUntil: "2026-08-07T15:00:00Z" },
   ],
@@ -31,9 +38,27 @@ describe("buildThreadActionMenuItems", () => {
     expect(
       ids({
         ...baseState,
-        supports: { settlement: false, snooze: false, pinning: false, titleRegeneration: false },
+        supports: {
+          settlement: false,
+          snooze: false,
+          pinning: false,
+          titleRegeneration: false,
+          forking: false,
+        },
       }),
     ).toEqual(["rename", "mark-unread", "copy", "archive", "delete"]);
+  });
+
+  it("only offers a fork for supported threads and disables it while blocked", () => {
+    expect(ids(baseState)).toContain("fork");
+    expect(
+      ids({ ...baseState, supports: { ...baseState.supports, forking: false } }),
+    ).not.toContain("fork");
+    expect(
+      buildThreadActionMenuItems({ ...baseState, canFork: false }).find(
+        (item) => item.id === "fork",
+      )?.disabled,
+    ).toBe(true);
   });
 
   it("includes branch items only for threads with a branch", () => {
@@ -84,7 +109,13 @@ describe("buildThreadActionMenuItems", () => {
     expect(
       ids({
         ...baseState,
-        supports: { settlement: false, snooze: false, pinning: false, titleRegeneration: false },
+        supports: {
+          settlement: false,
+          snooze: false,
+          pinning: false,
+          titleRegeneration: false,
+          forking: false,
+        },
       }),
     ).toContain("archive");
   });

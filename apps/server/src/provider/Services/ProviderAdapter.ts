@@ -21,6 +21,8 @@ import type {
   ThreadId,
   ProviderTurnStartResult,
   TurnId,
+  RuntimeMode,
+  ModelSelection,
 } from "@t3tools/contracts";
 import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
@@ -32,6 +34,21 @@ export interface ProviderAdapterCapabilities {
    * Declares whether changing the model on an existing session is supported.
    */
   readonly sessionModelSwitch: ProviderSessionModelSwitchMode;
+  readonly threadFork?: "native" | "unsupported";
+}
+
+export interface ProviderThreadForkInput {
+  readonly sourceThreadId: ThreadId;
+  readonly targetThreadId: ThreadId;
+  readonly sourceResumeCursor: unknown;
+  readonly lastTurnId: TurnId;
+  readonly cwd: string;
+  readonly runtimeMode: RuntimeMode;
+  readonly modelSelection: ModelSelection;
+}
+
+export interface ProviderThreadForkResult {
+  readonly resumeCursor: unknown;
 }
 
 export interface ProviderThreadTurnSnapshot {
@@ -57,6 +74,15 @@ export interface ProviderAdapterShape<TError> {
   readonly startSession: (
     input: ProviderSessionStartInput,
   ) => Effect.Effect<ProviderSession, TError>;
+
+  readonly forkThread?: (
+    input: ProviderThreadForkInput,
+  ) => Effect.Effect<ProviderThreadForkResult, TError>;
+
+  readonly deleteThread?: (input: {
+    readonly threadId: ThreadId;
+    readonly resumeCursor: unknown;
+  }) => Effect.Effect<void, TError>;
 
   /**
    * Send a turn to an active provider session.

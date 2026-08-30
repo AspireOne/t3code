@@ -59,6 +59,10 @@ shortcut is `mod+shift+s`, and it does not run while the terminal has focus.
 already pinned. Its default shortcut is `mod+shift+p`, and it does not run while the terminal has
 focus. See [Organizing threads](./thread-sidebar.md) for how pinned threads are ordered.
 
+`chat.fork` creates an independent fork of the active Codex thread through its latest completed
+turn. It has no default shortcut and is available in the web and desktop apps when the thread is
+idle. See [Codex](./providers-codex.md) for the full behavior.
+
 The command palette searches active thread titles, projects, branches, user messages, and final
 agent responses across connected environments. Message matches show one labeled excerpt while
 keeping the thread's project, branch, and machine context visible. Message search begins after two

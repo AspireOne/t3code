@@ -26,6 +26,9 @@ import type {
   ProviderUploadFeedbackResult,
   ThreadId,
   ProviderTurnStartResult,
+  ModelSelection,
+  RuntimeMode,
+  TurnId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
@@ -46,6 +49,24 @@ export interface ProviderServiceShape {
     threadId: ThreadId,
     input: ProviderSessionStartInput,
   ) => Effect.Effect<ProviderSession, ProviderServiceError>;
+
+  readonly forkConversation?: (input: {
+    readonly sourceThreadId: ThreadId;
+    readonly targetThreadId: ThreadId;
+    readonly lastTurnId: TurnId;
+    readonly cwd: string;
+    readonly runtimeMode: RuntimeMode;
+    readonly modelSelection: ModelSelection;
+  }) => Effect.Effect<
+    { readonly resumeCursor: unknown; readonly providerInstanceId: ProviderInstanceId },
+    ProviderServiceError
+  >;
+
+  readonly discardFork?: (input: {
+    readonly threadId: ThreadId;
+    readonly providerInstanceId: ProviderInstanceId;
+    readonly resumeCursor: unknown;
+  }) => Effect.Effect<void, ProviderServiceError>;
 
   /**
    * Send a provider turn.

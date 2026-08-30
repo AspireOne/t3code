@@ -155,6 +155,7 @@ export const make = Effect.gen(function* () {
       pullRequests: true,
       threadSettlement: true,
       threadCompaction: true,
+      threadForking: true,
       threadSnooze: true,
       threadPinning: true,
       threadPinReorder: true,

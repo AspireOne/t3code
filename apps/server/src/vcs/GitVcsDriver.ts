@@ -796,6 +796,17 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         Effect.map((commit) => commit !== null),
       ),
 
+    copyCheckpointRef: Effect.fn("GitVcsDriver.checkpoints.copyCheckpointRef")(function* (input) {
+      const commitOid = yield* resolveCheckpointCommit(input.cwd, input.sourceCheckpointRef);
+      if (commitOid === null) return false;
+      yield* execute({
+        operation: "GitVcsDriver.checkpoints.copyCheckpointRef",
+        cwd: input.cwd,
+        args: ["update-ref", input.targetCheckpointRef, commitOid],
+      });
+      return true;
+    }),
+
     restoreCheckpoint: Effect.fn("GitVcsDriver.checkpoints.restoreCheckpoint")(function* (input) {
       const operation = "GitVcsDriver.checkpoints.restoreCheckpoint";
 

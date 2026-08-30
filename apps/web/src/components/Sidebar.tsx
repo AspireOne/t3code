@@ -108,7 +108,7 @@ import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
-import { useProjects, useThreadShells } from "../state/entities";
+import { readThreadCanFork, useProjects, useThreadShells } from "../state/entities";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
 import { vcsEnvironment } from "../state/vcs";
 import { threadEnvironment } from "../state/threads";
@@ -1756,6 +1756,7 @@ export default function Sidebar() {
     reorderPinnedThread,
     archiveThread,
     deleteThread,
+    forkThread,
   } = useThreadActions();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -3124,6 +3125,13 @@ export default function Sidebar() {
         const supportsTitleRegeneration =
           serverConfigs.get(thread.environmentId)?.environment.capabilities
             .threadTitleRegeneration === true;
+        const forkProviderInstanceId =
+          thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
+        const supportsForking =
+          serverConfigs.get(thread.environmentId)?.environment.capabilities.threadForking ===
+            true &&
+          providerEntriesByEnvironment.get(thread.environmentId)?.get(forkProviderInstanceId)
+            ?.driverKind === "codex";
         const isRegeneratingTitle = thread.titleRegeneration != null;
         const isSettled = settledThreadKeysRef.current.has(threadKey);
         const isSnoozed = snoozedThreadKeysRef.current.has(threadKey);
@@ -3138,6 +3146,7 @@ export default function Sidebar() {
               isSettled,
               isSnoozed,
               canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
+              canFork: readThreadCanFork(threadRef),
               isRegeneratingTitle,
               isRunning:
                 thread.session?.status === "running" && thread.session.activeTurnId != null,
@@ -3146,6 +3155,7 @@ export default function Sidebar() {
                 snooze: supportsSnooze,
                 pinning: supportsPinning,
                 titleRegeneration: supportsTitleRegeneration,
+                forking: supportsForking,
               },
               snoozePresets,
             }),
@@ -3161,6 +3171,20 @@ export default function Sidebar() {
           return;
         }
         switch (clicked.value) {
+          case "fork": {
+            const result = await forkThread(threadRef);
+            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+              const error = squashAtomCommandFailure(result);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Failed to fork thread",
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                }),
+              );
+            }
+            return;
+          }
           case "new-thread-on-branch": {
             // Explicit branch carry-over: reuse the thread's worktree when it
             // has one, otherwise its branch on the local checkout.
@@ -3318,9 +3342,11 @@ export default function Sidebar() {
       copyPathToClipboard,
       copyThreadIdToClipboard,
       deleteThread,
+      forkThread,
       handleMultiSelectContextMenu,
       markThreadUnread,
       projectCwdByKey,
+      providerEntriesByEnvironment,
       serverConfigs,
       startThreadRename,
       updateThreadMetadata,

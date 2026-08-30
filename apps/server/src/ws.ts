@@ -3,8 +3,10 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -49,6 +51,7 @@ import {
   ProjectSearchEntriesError,
   ProjectWriteFileError,
   ProviderUploadFeedbackError,
+  type ProviderInstanceId,
   RelayClientInstallFailedError,
   type RelayClientInstallProgressEvent,
   type ServerSelfUpdateError,
@@ -72,6 +75,9 @@ import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/uns
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
+import * as CheckpointStore from "./checkpointing/CheckpointStore.ts";
+import { checkpointRefForThreadTurn } from "./checkpointing/Utils.ts";
+import { forkAttachmentForThread, resolveAttachmentPath } from "./attachmentStore.ts";
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -491,6 +497,9 @@ const makeWsRpcLayer = (
         }
       };
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
+      const checkpointStore = yield* CheckpointStore.CheckpointStore;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
       const keybindings = yield* Keybindings.Keybindings;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
       const remoteOpenTargets = yield* RemoteOpenTargets.RemoteOpenTargets;
@@ -1126,25 +1135,201 @@ const makeWsRpcLayer = (
           );
         });
 
+      const dispatchForkThread = Effect.fn("dispatchForkThread")(function* (
+        command: Extract<OrchestrationCommand, { type: "thread.fork" }>,
+      ) {
+        const existingTarget = yield* projectionSnapshotQuery.getThreadShellById(command.threadId);
+        if (Option.isSome(existingTarget)) {
+          return yield* dispatchFromClient(command);
+        }
+
+        const sourceSnapshot = yield* projectionSnapshotQuery.getThreadDetailSnapshot(
+          command.sourceThreadId,
+        );
+        const checkpointContext = yield* projectionSnapshotQuery.getThreadCheckpointContext(
+          command.sourceThreadId,
+        );
+        if (Option.isNone(sourceSnapshot) || Option.isNone(checkpointContext)) {
+          return yield* new OrchestrationDispatchCommandError({
+            message: "The source thread is unavailable and cannot be forked.",
+          });
+        }
+        const source = sourceSnapshot.value.thread;
+        const latestTurn = source.latestTurn;
+        if (latestTurn === null || latestTurn.completedAt === null) {
+          return yield* new OrchestrationDispatchCommandError({
+            message: "Wait for the source thread to finish before forking it.",
+          });
+        }
+        const cwd = source.worktreePath ?? checkpointContext.value.workspaceRoot;
+        const copiedAttachmentPaths: string[] = [];
+        const copiedCheckpointRefs: Array<ReturnType<typeof checkpointRefForThreadTurn>> = [];
+        let providerFork:
+          | {
+              readonly resumeCursor: unknown;
+              readonly providerInstanceId: ProviderInstanceId;
+            }
+          | undefined;
+        let cleanupCompleted = false;
+
+        const cleanup = Effect.gen(function* () {
+          if (cleanupCompleted) return;
+          cleanupCompleted = true;
+          if (providerFork !== undefined) {
+            yield* (
+              providerService.discardFork?.({
+                threadId: command.threadId,
+                providerInstanceId: providerFork.providerInstanceId,
+                resumeCursor: providerFork.resumeCursor,
+              }) ?? Effect.void
+            ).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("failed to discard native Codex fork", {
+                  threadId: command.threadId,
+                  cause,
+                }),
+              ),
+            );
+          }
+          if (copiedCheckpointRefs.length > 0) {
+            yield* checkpointStore
+              .deleteCheckpointRefs({
+                cwd,
+                checkpointRefs: copiedCheckpointRefs,
+              })
+              .pipe(Effect.ignoreCause({ log: true }));
+          }
+          yield* Effect.forEach(
+            copiedAttachmentPaths,
+            (attachmentPath) => fileSystem.remove(attachmentPath, { force: true }),
+            { discard: true },
+          ).pipe(Effect.ignoreCause({ log: true }));
+        });
+
+        return yield* Effect.gen(function* () {
+          const seenAttachmentIds = new Set<string>();
+          for (const message of source.messages) {
+            for (const attachment of message.attachments ?? []) {
+              if (seenAttachmentIds.has(attachment.id)) continue;
+              seenAttachmentIds.add(attachment.id);
+              const targetAttachment = forkAttachmentForThread(attachment, command.threadId);
+              const sourcePath = resolveAttachmentPath({
+                attachmentsDir: config.attachmentsDir,
+                attachment,
+              });
+              const targetPath = targetAttachment
+                ? resolveAttachmentPath({
+                    attachmentsDir: config.attachmentsDir,
+                    attachment: targetAttachment,
+                  })
+                : null;
+              if (sourcePath === null || targetPath === null) {
+                return yield* new OrchestrationDispatchCommandError({
+                  message: `Attachment '${attachment.name}' cannot be copied into the fork.`,
+                });
+              }
+              yield* fileSystem.makeDirectory(path.dirname(targetPath), { recursive: true });
+              copiedAttachmentPaths.push(targetPath);
+              yield* fileSystem.copyFile(sourcePath, targetPath);
+            }
+          }
+
+          if (source.checkpoints.length > 0) {
+            const targetBaselineRef = checkpointRefForThreadTurn(command.threadId, 0);
+            copiedCheckpointRefs.push(targetBaselineRef);
+            const copied = yield* (
+              checkpointStore.copyCheckpointRef?.({
+                cwd,
+                sourceCheckpointRef: checkpointRefForThreadTurn(command.sourceThreadId, 0),
+                targetCheckpointRef: targetBaselineRef,
+              }) ?? Effect.succeed(false)
+            );
+            if (!copied) {
+              return yield* new OrchestrationDispatchCommandError({
+                message: "The initial checkpoint is unavailable and cannot be copied.",
+              });
+            }
+          }
+
+          for (const checkpoint of source.checkpoints) {
+            const targetCheckpointRef = checkpointRefForThreadTurn(
+              command.threadId,
+              checkpoint.checkpointTurnCount,
+            );
+            copiedCheckpointRefs.push(targetCheckpointRef);
+            const copied = yield* (
+              checkpointStore.copyCheckpointRef?.({
+                cwd,
+                sourceCheckpointRef: checkpoint.checkpointRef,
+                targetCheckpointRef,
+              }) ?? Effect.succeed(false)
+            );
+            if (!copied) {
+              return yield* new OrchestrationDispatchCommandError({
+                message: `Checkpoint ${checkpoint.checkpointTurnCount} is unavailable and cannot be copied.`,
+              });
+            }
+          }
+
+          if (providerService.forkConversation === undefined) {
+            return yield* new OrchestrationDispatchCommandError({
+              message: "This server does not support provider-native thread forking.",
+            });
+          }
+          providerFork = yield* providerService.forkConversation({
+            sourceThreadId: command.sourceThreadId,
+            targetThreadId: command.threadId,
+            lastTurnId: latestTurn.turnId,
+            cwd,
+            runtimeMode: source.runtimeMode,
+            modelSelection: source.modelSelection,
+          });
+          return yield* dispatchFromClient({
+            ...command,
+            expectedSourceTurnId: latestTurn.turnId,
+            expectedSourceUpdatedAt: source.updatedAt,
+          }).pipe(
+            Effect.catchCause((cause) =>
+              cleanup.pipe(
+                Effect.andThen(
+                  Effect.fail(toDispatchCommandError(cause, "Failed to fork the thread")),
+                ),
+              ),
+            ),
+            Effect.uninterruptible,
+          );
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.uninterruptible(cleanup).pipe(
+              Effect.andThen(
+                Effect.fail(toDispatchCommandError(cause, "Failed to fork the thread")),
+              ),
+            ),
+          ),
+        );
+      });
+
       const dispatchNormalizedCommand = (
         normalizedCommand: OrchestrationCommand,
       ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> => {
         const dispatchEffect =
           normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap
             ? dispatchBootstrapTurnStart(normalizedCommand)
-            : dispatchFromClient(normalizedCommand).pipe(
-                Effect.tap(({ sequence }) =>
-                  // Returning from thread.create is the handoff point at which
-                  // clients may start resources for the new incarnation. Use
-                  // its event sequence as the exact deletion-cleanup fence.
-                  normalizedCommand.type === "thread.create"
-                    ? threadDeletionReactor.drainThrough(sequence)
-                    : Effect.void,
-                ),
-                Effect.mapError((cause) =>
-                  toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
-                ),
-              );
+            : normalizedCommand.type === "thread.fork"
+              ? dispatchForkThread(normalizedCommand)
+              : dispatchFromClient(normalizedCommand).pipe(
+                  Effect.tap(({ sequence }) =>
+                    // Returning from thread.create is the handoff point at which
+                    // clients may start resources for the new incarnation. Use
+                    // its event sequence as the exact deletion-cleanup fence.
+                    normalizedCommand.type === "thread.create"
+                      ? threadDeletionReactor.drainThrough(sequence)
+                      : Effect.void,
+                  ),
+                  Effect.mapError((cause) =>
+                    toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+                  ),
+                );
 
         return startup
           .enqueueCommand(dispatchEffect)

@@ -21,6 +21,7 @@ import {
   requireThreadNotArchived,
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
+import { forkedThreadTitle } from "./threadFork.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
@@ -377,6 +378,72 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           interactionMode: command.interactionMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.fork": {
+      const source = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.sourceThreadId,
+      });
+      yield* requireThreadAbsent({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (
+        command.expectedSourceTurnId === undefined ||
+        command.expectedSourceUpdatedAt === undefined ||
+        source.latestTurn?.turnId !== command.expectedSourceTurnId ||
+        source.updatedAt !== command.expectedSourceUpdatedAt
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "The source thread changed while the fork was being prepared. Try again.",
+        });
+      }
+      if (source.latestTurn === null || source.latestTurn.completedAt === null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "A thread needs a settled turn before it can be forked.",
+        });
+      }
+      if (source.session?.status === "starting" || source.session?.status === "running") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "A running thread cannot be forked.",
+        });
+      }
+      if (threadHasQueuedTurnStart(source, command.createdAt) || hasOpenBlockingRequest(source)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "A thread with pending work cannot be forked.",
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.forked",
+        payload: {
+          sourceThreadId: source.id,
+          threadId: command.threadId,
+          projectId: source.projectId,
+          title: forkedThreadTitle(source.title),
+          modelSelection: source.modelSelection,
+          runtimeMode: source.runtimeMode,
+          interactionMode: source.interactionMode,
+          branch: source.branch,
+          worktreePath: source.worktreePath,
+          forkedThroughTurnId: source.latestTurn.turnId,
+          latestTurn: source.latestTurn,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },

@@ -8,6 +8,7 @@ import {
   type EnvironmentThreadStatus,
   mergeEnvironmentThread,
 } from "@t3tools/client-runtime/state/threads";
+import { hasQueuedTurnStart } from "@t3tools/client-runtime/state/thread-settled";
 import type {
   OrchestrationMessage,
   OrchestrationProposedPlan,
@@ -256,6 +257,45 @@ export function readEnvironmentSupportsTitleRegeneration(environmentId: Environm
   return (
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
       .threadTitleRegeneration === true
+  );
+}
+
+/** Whether the environment can materialize a native provider thread fork. */
+export function readEnvironmentSupportsThreadForking(environmentId: EnvironmentId): boolean {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadForking === true
+  );
+}
+
+/** Resolve an instance through the thread's own environment under multi-server routing. */
+export function readEnvironmentProviderDriver(
+  environmentId: EnvironmentId,
+  instanceId: string,
+): string | null {
+  return (
+    appAtomRegistry
+      .get(environmentServerConfigsAtom)
+      .get(environmentId)
+      ?.providers.find((provider) => provider.instanceId === instanceId)?.driver ?? null
+  );
+}
+
+/** Forking is intentionally Codex-only in v1 and only starts from a settled turn tip. */
+export function readThreadCanFork(ref: ScopedThreadRef): boolean {
+  const thread = readThreadShell(ref);
+  if (!thread || !readEnvironmentSupportsThreadForking(ref.environmentId)) return false;
+  const instanceId = thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
+  const driver = readEnvironmentProviderDriver(ref.environmentId, instanceId);
+  const sessionIsActive =
+    thread.session?.status === "starting" || thread.session?.status === "running";
+  return (
+    driver === "codex" &&
+    thread.latestTurn?.completedAt != null &&
+    !sessionIsActive &&
+    !thread.hasPendingApprovals &&
+    !thread.hasPendingUserInput &&
+    !hasQueuedTurnStart(thread, { now: new Date().toISOString() })
   );
 }
 

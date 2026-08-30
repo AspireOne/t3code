@@ -167,6 +167,10 @@ export interface CodexSessionRuntimeOptions {
   readonly model?: string;
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly resumeCursor?: CodexResumeCursor;
+  readonly fork?: {
+    readonly sourceThreadId: string;
+    readonly lastTurnId: TurnId;
+  };
   readonly appServerArgs?: ReadonlyArray<string>;
   readonly rateLimitCoordinator?: CodexRateLimitCoordinatorShape;
 }
@@ -205,6 +209,7 @@ export interface CodexSessionRuntimeShape {
   readonly rollbackThread: (
     numTurns: number,
   ) => Effect.Effect<CodexThreadSnapshot, CodexSessionRuntimeError>;
+  readonly deleteThread?: Effect.Effect<void, CodexSessionRuntimeError>;
   readonly uploadFeedback: (
     reason?: string,
   ) => Effect.Effect<EffectCodexSchema.V2FeedbackUploadResponse, CodexSessionRuntimeError>;
@@ -681,7 +686,8 @@ export function isRecoverableThreadResumeError(error: unknown): boolean {
 
 type CodexThreadOpenResponse =
   | CodexRpc.ClientRequestResponsesByMethod["thread/start"]
-  | CodexRpc.ClientRequestResponsesByMethod["thread/resume"];
+  | CodexRpc.ClientRequestResponsesByMethod["thread/resume"]
+  | CodexRpc.ClientRequestResponsesByMethod["thread/fork"];
 
 type CodexThreadOpenMethod = "thread/start" | "thread/resume";
 
@@ -700,6 +706,7 @@ export const openCodexThread = (input: {
   readonly requestedModel: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
   readonly resumeThreadId: string | undefined;
+  readonly fork?: { readonly sourceThreadId: string; readonly lastTurnId: TurnId } | undefined;
 }): Effect.Effect<CodexThreadOpenResponse, CodexErrors.CodexAppServerError> => {
   const resumeThreadId = input.resumeThreadId;
   const startParams = buildThreadStartParams({
@@ -708,6 +715,22 @@ export const openCodexThread = (input: {
     model: input.requestedModel,
     serviceTier: input.serviceTier,
   });
+
+  if (input.fork !== undefined) {
+    const requestFork = input.client.request as unknown as (
+      method: "thread/fork",
+      payload: CodexRpc.ClientRequestParamsByMethod["thread/fork"],
+    ) => Effect.Effect<
+      CodexRpc.ClientRequestResponsesByMethod["thread/fork"],
+      CodexErrors.CodexAppServerError
+    >;
+    return requestFork("thread/fork", {
+      ...startParams,
+      threadId: input.fork.sourceThreadId,
+      lastTurnId: input.fork.lastTurnId,
+      ephemeral: false,
+    });
+  }
 
   if (resumeThreadId === undefined) {
     return input.client.request("thread/start", startParams);
@@ -2312,6 +2335,7 @@ export const makeCodexSessionRuntime = (
         requestedModel,
         serviceTier: options.serviceTier,
         resumeThreadId: readResumeCursorThreadId(options.resumeCursor),
+        fork: options.fork,
       });
 
       const providerThreadId = opened.thread.id;
@@ -2482,6 +2506,10 @@ export const makeCodexSessionRuntime = (
           });
           return parseThreadSnapshot(response);
         }),
+      deleteThread: readProviderThreadId.pipe(
+        Effect.flatMap((threadId) => client.request("thread/delete", { threadId })),
+        Effect.asVoid,
+      ),
       uploadFeedback: (reason) =>
         Effect.gen(function* () {
           const providerThreadId = yield* readProviderThreadId;
