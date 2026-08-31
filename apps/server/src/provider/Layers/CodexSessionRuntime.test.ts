@@ -21,9 +21,11 @@ import {
   coordinateCodexRateLimitNotification,
   describeMcpElicitation,
   hasConfiguredMcpServer,
+  isLegacyThreadRevertUnsupportedError,
   isRecoverableThreadResumeError,
   makeMemoryConsolidationNotificationFilter,
   openCodexThread,
+  revertOrRollbackCodexThread,
   toMcpElicitationResponse,
 } from "./CodexSessionRuntime.ts";
 import type {
@@ -888,6 +890,127 @@ describe("isRecoverableThreadResumeError", () => {
       false,
     );
   });
+});
+
+describe("Codex thread history rewind", () => {
+  const legacyRollbackResponse = {
+    thread: {
+      id: "provider-thread-1",
+      turns: [],
+    },
+  } as unknown as CodexRpc.ClientRequestResponsesByMethod["thread/rollback"];
+
+  it.effect("uses thread/revert with the first discarded turn for paginated threads", () =>
+    Effect.gen(function* () {
+      const typedRequests: Array<{ method: string; payload: unknown }> = [];
+      const rawRequests: Array<{ method: string; payload: unknown }> = [];
+      const client = {
+        request: (method: "thread/rollback", payload: unknown) => {
+          typedRequests.push({ method, payload });
+          return Effect.succeed(legacyRollbackResponse);
+        },
+        raw: {
+          request: (method: string, payload: unknown) => {
+            rawRequests.push({ method, payload });
+            return Effect.succeed({});
+          },
+        },
+      };
+
+      const snapshot = yield* revertOrRollbackCodexThread({
+        client,
+        threadId: "provider-thread-1",
+        numTurns: 2,
+        beforeTurnId: TurnId.make("turn-3"),
+      });
+
+      NodeAssert.deepStrictEqual(rawRequests, [
+        {
+          method: "thread/revert",
+          payload: {
+            threadId: "provider-thread-1",
+            beforeTurnId: "turn-3",
+          },
+        },
+      ]);
+      NodeAssert.deepStrictEqual(typedRequests, []);
+      NodeAssert.deepStrictEqual(snapshot, { threadId: "provider-thread-1", turns: [] });
+    }),
+  );
+
+  it.effect("falls back to thread/rollback only when Codex identifies a legacy thread", () =>
+    Effect.gen(function* () {
+      const calls: string[] = [];
+      const client = {
+        request: (_method: "thread/rollback", _payload: unknown) => {
+          calls.push("thread/rollback");
+          return Effect.succeed(legacyRollbackResponse);
+        },
+        raw: {
+          request: (_method: string, _payload: unknown) => {
+            calls.push("thread/revert");
+            return Effect.fail(
+              new CodexErrors.CodexAppServerRequestError({
+                code: -32600,
+                errorMessage: "thread/revert only supports paginated threads",
+              }),
+            );
+          },
+        },
+      };
+
+      const snapshot = yield* revertOrRollbackCodexThread({
+        client,
+        threadId: "provider-thread-1",
+        numTurns: 2,
+        beforeTurnId: TurnId.make("turn-3"),
+      });
+
+      NodeAssert.deepStrictEqual(calls, ["thread/revert", "thread/rollback"]);
+      NodeAssert.deepStrictEqual(snapshot, { threadId: "provider-thread-1", turns: [] });
+    }),
+  );
+
+  it("recognizes an older app server that does not implement thread/revert", () => {
+    NodeAssert.equal(
+      isLegacyThreadRevertUnsupportedError(
+        CodexErrors.CodexAppServerRequestError.methodNotFound("thread/revert"),
+      ),
+      true,
+    );
+  });
+
+  it.effect("does not hide unrelated thread/revert failures behind legacy rollback", () =>
+    Effect.gen(function* () {
+      let rollbackCalled = false;
+      const client = {
+        request: (_method: "thread/rollback", _payload: unknown) => {
+          rollbackCalled = true;
+          return Effect.succeed(legacyRollbackResponse);
+        },
+        raw: {
+          request: (_method: string, _payload: unknown) =>
+            Effect.fail(
+              new CodexErrors.CodexAppServerRequestError({
+                code: -32603,
+                errorMessage: "failed to persist reverted history",
+              }),
+            ),
+        },
+      };
+
+      const error = yield* revertOrRollbackCodexThread({
+        client,
+        threadId: "provider-thread-1",
+        numTurns: 2,
+        beforeTurnId: TurnId.make("turn-3"),
+      }).pipe(Effect.flip);
+
+      NodeAssert.equal(isLegacyThreadRevertUnsupportedError(error), false);
+      NodeAssert.equal(rollbackCalled, false);
+      NodeAssert.match(error.message, /failed to persist reverted history/);
+    }),
+  );
 });
 
 describe("openCodexThread", () => {

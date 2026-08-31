@@ -136,11 +136,13 @@ export interface ProviderServiceShape {
   ) => Effect.Effect<ProviderInstanceRoutingInfo, ProviderServiceError>;
 
   /**
-   * Roll back provider conversation state by a number of turns.
+   * Roll back provider conversation state by a number of turns, optionally
+   * using the first discarded provider turn as an exact history boundary.
    */
   readonly rollbackConversation: (input: {
     readonly threadId: ThreadId;
     readonly numTurns: number;
+    readonly beforeTurnId?: TurnId;
   }) => Effect.Effect<void, ProviderServiceError>;
 
   /**

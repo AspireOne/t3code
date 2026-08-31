@@ -100,7 +100,7 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
   );
 
   public readonly rollbackThreadImpl = vi.fn(
-    (_numTurns: number): Promise<CodexThreadSnapshot> =>
+    (_numTurns: number, _beforeTurnId?: TurnId): Promise<CodexThreadSnapshot> =>
       Promise.resolve({
         threadId: "provider-thread-1",
         turns: [],
@@ -149,8 +149,8 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
 
   readThread = Effect.promise(() => this.readThreadImpl());
 
-  rollbackThread(numTurns: number) {
-    return Effect.promise(() => this.rollbackThreadImpl(numTurns));
+  rollbackThread(numTurns: number, beforeTurnId?: TurnId) {
+    return Effect.promise(() => this.rollbackThreadImpl(numTurns, beforeTurnId));
   }
 
   uploadFeedback(reason?: string) {

@@ -196,6 +196,7 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     (
       threadId: ThreadId,
       _numTurns: number,
+      _beforeTurnId?: TurnId,
     ): Effect.Effect<{ threadId: ThreadId; turns: readonly [] }, ProviderAdapterError> =>
       Effect.succeed({ threadId, turns: [] }),
   );
@@ -1429,6 +1430,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       yield* provider.rollbackConversation({
         threadId: initial.threadId,
         numTurns: 1,
+        beforeTurnId: asTurnId("turn-first-discarded"),
       });
 
       assert.equal(routing.codex.startSession.mock.calls.length, 1);
@@ -1449,6 +1451,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert.equal(routing.codex.rollbackThread.mock.calls.length, 1);
       const rollbackCall = routing.codex.rollbackThread.mock.calls[0];
       assert.equal(rollbackCall?.[1], 1);
+      assert.equal(rollbackCall?.[2], "turn-first-discarded");
     }),
   );
 

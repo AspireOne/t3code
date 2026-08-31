@@ -13,6 +13,7 @@ import {
   ModelSelection,
   NonNegativeInt,
   ThreadId,
+  TurnId,
   ProviderInterruptTurnInput,
   ProviderCompactThreadInput,
   ProviderRespondToRequestInput,
@@ -86,6 +87,7 @@ type ProviderServiceMethod<Name extends keyof ProviderService.ProviderService["S
 const ProviderRollbackConversationInput = Schema.Struct({
   threadId: ThreadId,
   numTurns: NonNegativeInt,
+  beforeTurnId: Schema.optionalKey(TurnId),
 });
 
 function toValidationError(
@@ -1238,7 +1240,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         "provider.thread_id": input.threadId,
         "provider.rollback_turns": input.numTurns,
       });
-      yield* routed.adapter.rollbackThread(routed.threadId, input.numTurns);
+      yield* routed.adapter.rollbackThread(routed.threadId, input.numTurns, input.beforeTurnId);
       yield* analytics.record("provider.conversation.rolled_back", {
         provider: routed.adapter.provider,
         turns: input.numTurns,

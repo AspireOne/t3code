@@ -2057,7 +2057,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       })),
     );
 
-  const rollbackThread: CodexAdapterShape["rollbackThread"] = (threadId, numTurns) => {
+  const rollbackThread: CodexAdapterShape["rollbackThread"] = (
+    threadId,
+    numTurns,
+    beforeTurnId,
+  ) => {
     if (!Number.isInteger(numTurns) || numTurns < 1) {
       return Effect.fail(
         new ProviderAdapterValidationError({
@@ -2069,11 +2073,15 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     }
 
     return requireSession(threadId).pipe(
-      Effect.flatMap((session) => session.runtime.rollbackThread(numTurns)),
+      Effect.flatMap((session) => session.runtime.rollbackThread(numTurns, beforeTurnId)),
       Effect.mapError((cause) =>
         cause._tag === "ProviderAdapterSessionNotFoundError"
           ? cause
-          : mapCodexRuntimeError(threadId, "thread/rollback", cause),
+          : mapCodexRuntimeError(
+              threadId,
+              beforeTurnId === undefined ? "thread/rollback" : "thread/revert",
+              cause,
+            ),
       ),
       Effect.map((snapshot) => ({
         threadId,

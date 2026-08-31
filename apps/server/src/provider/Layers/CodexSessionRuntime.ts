@@ -208,6 +208,7 @@ export interface CodexSessionRuntimeShape {
   readonly readThread: Effect.Effect<CodexThreadSnapshot, CodexSessionRuntimeError>;
   readonly rollbackThread: (
     numTurns: number,
+    beforeTurnId?: TurnId,
   ) => Effect.Effect<CodexThreadSnapshot, CodexSessionRuntimeError>;
   readonly deleteThread?: Effect.Effect<void, CodexSessionRuntimeError>;
   readonly uploadFeedback: (
@@ -682,6 +683,61 @@ export function isRecoverableThreadResumeError(error: unknown): boolean {
     return false;
   }
   return RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS.some((snippet) => message.includes(snippet));
+}
+
+export function isLegacyThreadRevertUnsupportedError(error: unknown): boolean {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return (
+    message.includes("thread/revert only supports paginated threads") ||
+    (message.includes("method not found") && message.includes("thread/revert"))
+  );
+}
+
+interface CodexThreadHistoryClient {
+  readonly request: (
+    method: "thread/rollback",
+    payload: CodexRpc.ClientRequestParamsByMethod["thread/rollback"],
+  ) => Effect.Effect<
+    CodexRpc.ClientRequestResponsesByMethod["thread/rollback"],
+    CodexErrors.CodexAppServerError
+  >;
+  readonly raw: {
+    readonly request: (
+      method: string,
+      payload: unknown,
+    ) => Effect.Effect<unknown, CodexErrors.CodexAppServerError>;
+  };
+}
+
+export function revertOrRollbackCodexThread(input: {
+  readonly client: CodexThreadHistoryClient;
+  readonly threadId: string;
+  readonly numTurns: number;
+  readonly beforeTurnId?: TurnId;
+}): Effect.Effect<CodexThreadSnapshot, CodexErrors.CodexAppServerError> {
+  const rollback = () =>
+    input.client
+      .request("thread/rollback", {
+        threadId: input.threadId,
+        numTurns: input.numTurns,
+      })
+      .pipe(Effect.map(parseThreadSnapshot));
+
+  if (input.beforeTurnId === undefined) {
+    return rollback();
+  }
+
+  // The generated client predates thread/revert, so use its typed raw transport
+  // until the vendored Codex protocol is regenerated.
+  return input.client.raw
+    .request("thread/revert", {
+      threadId: input.threadId,
+      beforeTurnId: input.beforeTurnId,
+    })
+    .pipe(
+      Effect.as({ threadId: input.threadId, turns: [] }),
+      Effect.catchIf(isLegacyThreadRevertUnsupportedError, rollback),
+    );
 }
 
 type CodexThreadOpenResponse =
@@ -2493,18 +2549,20 @@ export const makeCodexSessionRuntime = (
         });
         return parseThreadSnapshot(response);
       }),
-      rollbackThread: (numTurns) =>
+      rollbackThread: (numTurns, beforeTurnId) =>
         Effect.gen(function* () {
           const providerThreadId = yield* readProviderThreadId;
-          const response = yield* client.request("thread/rollback", {
+          const snapshot = yield* revertOrRollbackCodexThread({
+            client,
             threadId: providerThreadId,
             numTurns,
+            ...(beforeTurnId !== undefined ? { beforeTurnId } : {}),
           });
           yield* updateSession(sessionRef, {
             status: "ready",
             activeTurnId: undefined,
           });
-          return parseThreadSnapshot(response);
+          return snapshot;
         }),
       deleteThread: readProviderThreadId.pipe(
         Effect.flatMap((threadId) => client.request("thread/delete", { threadId })),

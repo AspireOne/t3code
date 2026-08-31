@@ -87,7 +87,11 @@ function createProviderServiceHarness(
   const now = "2026-01-01T00:00:00.000Z";
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
   const rollbackConversation = vi.fn(
-    (_input: { readonly threadId: ThreadId; readonly numTurns: number }) => Effect.void,
+    (_input: {
+      readonly threadId: ThreadId;
+      readonly numTurns: number;
+      readonly beforeTurnId?: TurnId;
+    }) => Effect.void,
   );
 
   const unsupported = <A>() =>
@@ -1158,6 +1162,7 @@ describe("CheckpointReactor", () => {
     expect(harness.provider.rollbackConversation).toHaveBeenCalledWith({
       threadId: ThreadId.make("thread-1"),
       numTurns: 1,
+      beforeTurnId: asTurnId("turn-2"),
     });
     expect(NodeFS.readFileSync(NodePath.join(harness.cwd, "README.md"), "utf8")).toBe("v2\n");
     expect(
@@ -1231,6 +1236,7 @@ describe("CheckpointReactor", () => {
     expect(harness.provider.rollbackConversation).toHaveBeenCalledWith({
       threadId: ThreadId.make("thread-1"),
       numTurns: 1,
+      beforeTurnId: asTurnId("turn-claude-2"),
     });
   });
 
@@ -1310,10 +1316,12 @@ describe("CheckpointReactor", () => {
     expect(harness.provider.rollbackConversation.mock.calls[0]?.[0]).toEqual({
       threadId: ThreadId.make("thread-1"),
       numTurns: 1,
+      beforeTurnId: asTurnId("turn-2"),
     });
     expect(harness.provider.rollbackConversation.mock.calls[1]?.[0]).toEqual({
       threadId: ThreadId.make("thread-1"),
       numTurns: 1,
+      beforeTurnId: asTurnId("turn-1"),
     });
   });
 
@@ -1351,6 +1359,7 @@ describe("CheckpointReactor", () => {
     expect(harness.provider.rollbackConversation).toHaveBeenCalledWith({
       threadId: ThreadId.make("thread-1"),
       numTurns: 1,
+      beforeTurnId: asTurnId("turn-1"),
     });
     expect(NodeFS.readFileSync(NodePath.join(harness.cwd, "README.md"), "utf8")).toBe("v1\n");
   });

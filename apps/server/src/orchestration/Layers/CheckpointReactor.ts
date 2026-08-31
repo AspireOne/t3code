@@ -772,9 +772,13 @@ const make = Effect.gen(function* () {
 
     const rolledBackTurns = Math.max(0, currentTurnCount - event.payload.turnCount);
     if (rolledBackTurns > 0) {
+      const firstDiscardedTurnId = thread.checkpoints
+        .filter((checkpoint) => checkpoint.checkpointTurnCount > event.payload.turnCount)
+        .toSorted((left, right) => left.checkpointTurnCount - right.checkpointTurnCount)[0]?.turnId;
       yield* providerService.rollbackConversation({
         threadId: event.payload.threadId,
         numTurns: rolledBackTurns,
+        ...(firstDiscardedTurnId !== undefined ? { beforeTurnId: firstDiscardedTurnId } : {}),
       });
     }
 
