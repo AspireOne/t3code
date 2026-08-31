@@ -21,6 +21,7 @@ import {
   shouldIncludeBranchPickerItem,
   shouldShowComposerContextStrip,
   shouldShowEnvironmentIndicator,
+  shouldShowBranchToolbarPr,
 } from "./BranchToolbar.logic";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
@@ -61,6 +62,24 @@ describe("resolveBranchToolbarGitStatus", () => {
         behindCount: 2,
       }),
     ).toEqual([]);
+  });
+});
+
+describe("shouldShowBranchToolbarPr", () => {
+  const pullRequest = {
+    number: 1,
+    title: "Feature",
+    url: "https://git.example.com/project/merge_requests/1",
+    baseRef: "main",
+    headRef: "feature",
+    updatedAt: null,
+  } as const;
+
+  it("shows only an open pull request in the composer toolbar", () => {
+    expect(shouldShowBranchToolbarPr({ ...pullRequest, state: "open" })).toBe(true);
+    expect(shouldShowBranchToolbarPr({ ...pullRequest, state: "closed" })).toBe(false);
+    expect(shouldShowBranchToolbarPr({ ...pullRequest, state: "merged" })).toBe(false);
+    expect(shouldShowBranchToolbarPr(null)).toBe(false);
   });
 });
 

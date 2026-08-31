@@ -51,6 +51,7 @@ import {
   resolveEffectiveEnvMode,
   sanitizeNewRefName,
   shouldIncludeBranchPickerItem,
+  shouldShowBranchToolbarPr,
 } from "./BranchToolbar.logic";
 import {
   ChangeRequestStatusIcon,
@@ -621,14 +622,15 @@ export function BranchToolbarBranchSelector({
     startFromOrigin,
   });
 
-  // PR pill shown next to the branch selector when the active branch has one.
-  const branchPr = resolveThreadPr({
+  // Keep terminal PR history out of the composer; it remains available in the sidebar.
+  const resolvedBranchPr = resolveThreadPr({
     threadBranch: resolveBranchToolbarPrBranch({
       activeThreadBranch,
       resolvedActiveBranch,
     }),
     gitStatus: branchStatusQuery.data ?? null,
   });
+  const branchPr = shouldShowBranchToolbarPr(resolvedBranchPr) ? resolvedBranchPr : null;
   const branchPrStatus = prStatusIndicator(branchPr, branchStatusQuery.data?.sourceControlProvider);
   // Action-oriented tooltip (the pill opens the PR), distinct from the sidebar's
   // state-description tooltip.

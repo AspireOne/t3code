@@ -62,6 +62,10 @@ export function resolveBranchToolbarGitStatus(
   return candidates.filter((item) => item.count > 0);
 }
 
+export function shouldShowBranchToolbarPr(pr: VcsStatusResult["pr"]): boolean {
+  return pr?.state === "open";
+}
+
 const GENERIC_LOCAL_ENVIRONMENT_LABELS = new Set(["local", "local environment"]);
 
 function normalizeDisplayLabel(value: string | null | undefined): string | null {
