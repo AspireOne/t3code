@@ -938,6 +938,40 @@ describe("Codex thread history rewind", () => {
     }),
   );
 
+  it.effect("uses count-based rollback when no exact turn boundary is available", () =>
+    Effect.gen(function* () {
+      const typedRequests: Array<{ method: string; payload: unknown }> = [];
+      let rawRequestCalled = false;
+      const client = {
+        request: (method: "thread/rollback", payload: unknown) => {
+          typedRequests.push({ method, payload });
+          return Effect.succeed(legacyRollbackResponse);
+        },
+        raw: {
+          request: (_method: string, _payload: unknown) => {
+            rawRequestCalled = true;
+            return Effect.succeed({});
+          },
+        },
+      };
+
+      const snapshot = yield* revertOrRollbackCodexThread({
+        client,
+        threadId: "provider-thread-1",
+        numTurns: 2,
+      });
+
+      NodeAssert.deepStrictEqual(typedRequests, [
+        {
+          method: "thread/rollback",
+          payload: { threadId: "provider-thread-1", numTurns: 2 },
+        },
+      ]);
+      NodeAssert.equal(rawRequestCalled, false);
+      NodeAssert.deepStrictEqual(snapshot, { threadId: "provider-thread-1", turns: [] });
+    }),
+  );
+
   it.effect("falls back to thread/rollback only when Codex identifies a legacy thread", () =>
     Effect.gen(function* () {
       const calls: string[] = [];
@@ -971,14 +1005,43 @@ describe("Codex thread history rewind", () => {
     }),
   );
 
-  it("recognizes an older app server that does not implement thread/revert", () => {
-    NodeAssert.equal(
-      isLegacyThreadRevertUnsupportedError(
-        CodexErrors.CodexAppServerRequestError.methodNotFound("thread/revert"),
-      ),
-      true,
-    );
-  });
+  it.effect("falls back when an older app server rejects thread/revert as unknown", () =>
+    Effect.gen(function* () {
+      const calls: string[] = [];
+      const client = {
+        request: (_method: "thread/rollback", _payload: unknown) => {
+          calls.push("thread/rollback");
+          return Effect.succeed(legacyRollbackResponse);
+        },
+        raw: {
+          request: (_method: string, _payload: unknown) => {
+            calls.push("thread/revert");
+            return Effect.fail(
+              CodexErrors.CodexAppServerRequestError.fromProtocolError(
+                {
+                  code: -32600,
+                  message:
+                    "Invalid request: unknown variant 'thread/revert', expected 'thread/rollback'",
+                },
+                "thread/revert",
+                "request-1",
+              ),
+            );
+          },
+        },
+      };
+
+      const snapshot = yield* revertOrRollbackCodexThread({
+        client,
+        threadId: "provider-thread-1",
+        numTurns: 2,
+        beforeTurnId: TurnId.make("turn-3"),
+      });
+
+      NodeAssert.deepStrictEqual(calls, ["thread/revert", "thread/rollback"]);
+      NodeAssert.deepStrictEqual(snapshot, { threadId: "provider-thread-1", turns: [] });
+    }),
+  );
 
   it.effect("does not hide unrelated thread/revert failures behind legacy rollback", () =>
     Effect.gen(function* () {
@@ -991,10 +1054,14 @@ describe("Codex thread history rewind", () => {
         raw: {
           request: (_method: string, _payload: unknown) =>
             Effect.fail(
-              new CodexErrors.CodexAppServerRequestError({
-                code: -32603,
-                errorMessage: "failed to persist reverted history",
-              }),
+              CodexErrors.CodexAppServerRequestError.fromProtocolError(
+                {
+                  code: -32600,
+                  message: "Invalid request: missing field 'beforeTurnId'",
+                },
+                "thread/revert",
+                "request-1",
+              ),
             ),
         },
       };
@@ -1008,7 +1075,7 @@ describe("Codex thread history rewind", () => {
 
       NodeAssert.equal(isLegacyThreadRevertUnsupportedError(error), false);
       NodeAssert.equal(rollbackCalled, false);
-      NodeAssert.match(error.message, /failed to persist reverted history/);
+      NodeAssert.match(error.message, /missing field 'beforeTurnId'/);
     }),
   );
 });

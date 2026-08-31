@@ -202,6 +202,32 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
       `,
   });
 
+  const listProjectionTurnsChronologicallyByThread = SqlSchema.findAll({
+    Request: ListProjectionTurnsByThreadInput,
+    Result: ProjectionTurnDbRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          pending_message_id AS "pendingMessageId",
+          source_proposed_plan_thread_id AS "sourceProposedPlanThreadId",
+          source_proposed_plan_id AS "sourceProposedPlanId",
+          assistant_message_id AS "assistantMessageId",
+          state,
+          requested_at AS "requestedAt",
+          started_at AS "startedAt",
+          completed_at AS "completedAt",
+          checkpoint_turn_count AS "checkpointTurnCount",
+          checkpoint_ref AS "checkpointRef",
+          checkpoint_status AS "checkpointStatus",
+          checkpoint_files_json AS "checkpointFiles"
+        FROM projection_turns
+        WHERE thread_id = ${threadId}
+        ORDER BY requested_at ASC, COALESCE(turn_id, '') ASC
+      `,
+  });
+
   const getProjectionTurnByTurnId = SqlSchema.findOneOption({
     Request: GetProjectionTurnByTurnIdInput,
     Result: ProjectionTurnByIdDbRowSchema,
@@ -307,6 +333,18 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
       Effect.map((rows) => rows as ReadonlyArray<Schema.Schema.Type<typeof ProjectionTurn>>),
     );
 
+  const listChronologicallyByThreadId: ProjectionTurnRepositoryShape["listChronologicallyByThreadId"] =
+    (input) =>
+      listProjectionTurnsChronologicallyByThread(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionTurnRepository.listChronologicallyByThreadId:query",
+            "ProjectionTurnRepository.listChronologicallyByThreadId:decodeRows",
+          ),
+        ),
+        Effect.map((rows) => rows as ReadonlyArray<Schema.Schema.Type<typeof ProjectionTurn>>),
+      );
+
   const getByTurnId: ProjectionTurnRepositoryShape["getByTurnId"] = (input) =>
     getProjectionTurnByTurnId(input).pipe(
       Effect.mapError(
@@ -343,6 +381,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
     getPendingTurnStartByThreadId,
     deletePendingTurnStartByThreadId,
     listByThreadId,
+    listChronologicallyByThreadId,
     getByTurnId,
     clearCheckpointTurnConflict,
     deleteByThreadId,

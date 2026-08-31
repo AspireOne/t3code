@@ -143,6 +143,14 @@ export interface ProjectionTurnRepositoryShape {
   ) => Effect.Effect<ReadonlyArray<ProjectionTurn>, ProjectionRepositoryError>;
 
   /**
+   * Lists all projection rows in provider turn order, including rows without
+   * checkpoint metadata and pending placeholders.
+   */
+  readonly listChronologicallyByThreadId: (
+    input: ListProjectionTurnsByThreadInput,
+  ) => Effect.Effect<ReadonlyArray<ProjectionTurn>, ProjectionRepositoryError>;
+
+  /**
    * Looks up a concrete turn row by `{threadId, turnId}` and never returns pending placeholder rows.
    */
   readonly getByTurnId: (

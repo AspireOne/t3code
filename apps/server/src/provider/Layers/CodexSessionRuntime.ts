@@ -687,9 +687,29 @@ export function isRecoverableThreadResumeError(error: unknown): boolean {
 
 export function isLegacyThreadRevertUnsupportedError(error: unknown): boolean {
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
-  return (
+  if (
     message.includes("thread/revert only supports paginated threads") ||
     (message.includes("method not found") && message.includes("thread/revert"))
+  ) {
+    return true;
+  }
+  if (
+    typeof error !== "object" ||
+    error === null ||
+    !("_tag" in error) ||
+    error._tag !== "CodexAppServerRequestError" ||
+    !("method" in error) ||
+    error.method !== "thread/revert" ||
+    !("code" in error) ||
+    typeof error.code !== "number"
+  ) {
+    return false;
+  }
+  return (
+    error.code === -32601 ||
+    (error.code === -32600 &&
+      message.includes("unknown variant") &&
+      message.includes("thread/revert"))
   );
 }
 

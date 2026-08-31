@@ -45,6 +45,8 @@ import { RuntimeReceiptBusLive } from "./RuntimeReceiptBus.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
@@ -269,7 +271,8 @@ describe("CheckpointReactor", () => {
     | OrchestrationEngineService
     | CheckpointReactor
     | CheckpointStore.CheckpointStore
-    | ProjectionSnapshotQuery,
+    | ProjectionSnapshotQuery
+    | ProjectionTurnRepository,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -363,6 +366,7 @@ describe("CheckpointReactor", () => {
     });
 
     const layer = CheckpointReactorLive.pipe(
+      Layer.provideMerge(ProjectionTurnRepositoryLive),
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
       Layer.provideMerge(RuntimeReceiptBusLive),
@@ -379,11 +383,13 @@ describe("CheckpointReactor", () => {
       Layer.provideMerge(VcsProcess.layer),
       Layer.provideMerge(ServerConfigLayer),
       Layer.provideMerge(NodeServices.layer),
+      Layer.provide(SqlitePersistenceMemory),
     );
 
     runtime = ManagedRuntime.make(layer);
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
+    const projectionTurns = await runtime.runPromise(Effect.service(ProjectionTurnRepository));
     const reactor = await runtime.runPromise(Effect.service(CheckpointReactor));
     const checkpointStore = await runtime.runPromise(
       Effect.service(CheckpointStore.CheckpointStore),
@@ -480,6 +486,7 @@ describe("CheckpointReactor", () => {
     return {
       engine,
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
+      projectionTurns,
       provider,
       cwd,
       workspaceCwd,
@@ -1170,6 +1177,129 @@ describe("CheckpointReactor", () => {
     ).toBe(false);
   });
 
+  it("reverts an uncheckpointed native turn between two checkpoints", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.make("thread-1");
+
+    await harness.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.make("cmd-diff-uncheckpointed-before-1"),
+        threadId,
+        turnId: asTurnId("turn-1"),
+        completedAt: "2026-01-01T00:00:01.000Z",
+        checkpointRef: checkpointRefForThreadTurn(threadId, 1),
+        status: "ready",
+        files: [],
+        checkpointTurnCount: 1,
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+    await harness.runPromise(
+      harness.projectionTurns.upsertByTurnId({
+        threadId,
+        turnId: asTurnId("turn-2"),
+        pendingMessageId: null,
+        sourceProposedPlanThreadId: null,
+        sourceProposedPlanId: null,
+        assistantMessageId: null,
+        state: "interrupted",
+        requestedAt: "2026-01-01T00:00:02.000Z",
+        startedAt: "2026-01-01T00:00:02.000Z",
+        completedAt: "2026-01-01T00:00:02.000Z",
+        checkpointTurnCount: null,
+        checkpointRef: null,
+        checkpointStatus: null,
+        checkpointFiles: [],
+      }),
+    );
+    await harness.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.make("cmd-diff-uncheckpointed-before-3"),
+        threadId,
+        turnId: asTurnId("turn-3"),
+        completedAt: "2026-01-01T00:00:03.000Z",
+        checkpointRef: checkpointRefForThreadTurn(threadId, 2),
+        status: "ready",
+        files: [],
+        checkpointTurnCount: 2,
+        createdAt: "2026-01-01T00:00:03.000Z",
+      }),
+    );
+    await harness.runPromise(
+      harness.engine.dispatch({
+        type: "thread.checkpoint.revert",
+        commandId: CommandId.make("cmd-revert-uncheckpointed-before"),
+        threadId,
+        turnCount: 1,
+        createdAt: "2026-01-01T00:00:04.000Z",
+      }),
+    );
+    await waitForEvent(harness.engine, (event) => event.type === "thread.reverted");
+
+    expect(harness.provider.rollbackConversation).toHaveBeenCalledWith({
+      threadId,
+      numTurns: 2,
+      beforeTurnId: asTurnId("turn-2"),
+    });
+  });
+
+  it("reverts uncheckpointed native history even when checkpoint counts do not change", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.make("thread-1");
+
+    await harness.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.make("cmd-diff-uncheckpointed-only-1"),
+        threadId,
+        turnId: asTurnId("turn-1"),
+        completedAt: "2026-01-01T00:00:01.000Z",
+        checkpointRef: checkpointRefForThreadTurn(threadId, 1),
+        status: "ready",
+        files: [],
+        checkpointTurnCount: 1,
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+    await harness.runPromise(
+      harness.projectionTurns.upsertByTurnId({
+        threadId,
+        turnId: asTurnId("turn-2"),
+        pendingMessageId: null,
+        sourceProposedPlanThreadId: null,
+        sourceProposedPlanId: null,
+        assistantMessageId: null,
+        state: "error",
+        requestedAt: "2026-01-01T00:00:02.000Z",
+        startedAt: "2026-01-01T00:00:02.000Z",
+        completedAt: "2026-01-01T00:00:02.000Z",
+        checkpointTurnCount: null,
+        checkpointRef: null,
+        checkpointStatus: null,
+        checkpointFiles: [],
+      }),
+    );
+
+    await harness.runPromise(
+      harness.engine.dispatch({
+        type: "thread.checkpoint.revert",
+        commandId: CommandId.make("cmd-revert-uncheckpointed-only"),
+        threadId,
+        turnCount: 1,
+        createdAt: "2026-01-01T00:00:03.000Z",
+      }),
+    );
+    await waitForEvent(harness.engine, (event) => event.type === "thread.reverted");
+
+    expect(harness.provider.rollbackConversation).toHaveBeenCalledWith({
+      threadId,
+      numTurns: 1,
+      beforeTurnId: asTurnId("turn-2"),
+    });
+  });
+
   it("executes provider revert and emits thread.reverted for claude sessions", async () => {
     const harness = await createHarness({ providerName: ProviderDriverKind.make("claudeAgent") });
     const createdAt = "2026-01-01T00:00:00.000Z";
@@ -1244,7 +1374,7 @@ describe("CheckpointReactor", () => {
     const harness = await createHarness();
     const createdAt = "2026-01-01T00:00:00.000Z";
 
-    await Effect.runPromise(
+    await harness.runPromise(
       harness.engine.dispatch({
         type: "thread.session.set",
         commandId: CommandId.make("cmd-session-set-inline-revert"),
@@ -1262,7 +1392,7 @@ describe("CheckpointReactor", () => {
       }),
     );
 
-    await Effect.runPromise(
+    await harness.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.diff.complete",
         commandId: CommandId.make("cmd-inline-revert-diff-1"),
@@ -1276,7 +1406,7 @@ describe("CheckpointReactor", () => {
         createdAt,
       }),
     );
-    await Effect.runPromise(
+    await harness.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.diff.complete",
         commandId: CommandId.make("cmd-inline-revert-diff-2"),
@@ -1291,7 +1421,7 @@ describe("CheckpointReactor", () => {
       }),
     );
 
-    await Effect.runPromise(
+    await harness.runPromise(
       harness.engine.dispatch({
         type: "thread.checkpoint.revert",
         commandId: CommandId.make("cmd-sequenced-revert-request-1"),
@@ -1300,7 +1430,7 @@ describe("CheckpointReactor", () => {
         createdAt,
       }),
     );
-    await Effect.runPromise(
+    await harness.runPromise(
       harness.engine.dispatch({
         type: "thread.checkpoint.revert",
         commandId: CommandId.make("cmd-sequenced-revert-request-0"),

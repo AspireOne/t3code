@@ -324,6 +324,25 @@ validationLayer("CodexAdapterLive validation", (it) => {
     }),
   );
 
+  it.effect("forwards the exact discarded-turn boundary to the Codex runtime", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-revert");
+      const beforeTurnId = asTurnId("native-turn-3");
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      const runtime = validationRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      yield* adapter.rollbackThread(threadId, 2, beforeTurnId);
+
+      NodeAssert.deepStrictEqual(runtime.rollbackThreadImpl.mock.calls, [[2, beforeTurnId]]);
+    }),
+  );
+
   it.effect("forks through a one-shot runtime and closes it without registering a session", () =>
     Effect.gen(function* () {
       validationRuntimeFactory.factory.mockClear();

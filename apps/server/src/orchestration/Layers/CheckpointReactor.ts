@@ -37,6 +37,7 @@ import type { CheckpointStoreError } from "../../checkpointing/Errors.ts";
 import type { OrchestrationDispatchError } from "../Errors.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as WorkspaceEntries from "../../workspace/WorkspaceEntries.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
@@ -82,6 +83,7 @@ const make = Effect.gen(function* () {
     randomUUID.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+  const projectionTurnRepository = yield* ProjectionTurnRepository;
   const providerService = yield* ProviderService;
   const checkpointStore = yield* CheckpointStore.CheckpointStore;
   const receiptBus = yield* RuntimeReceiptBus;
@@ -733,6 +735,26 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    const chronologicalTurns = yield* projectionTurnRepository.listChronologicallyByThreadId({
+      threadId: event.payload.threadId,
+    });
+    const concreteTurns = chronologicalTurns.filter((turn) => turn.turnId !== null);
+    const retainedTurnIndex =
+      event.payload.turnCount === 0
+        ? -1
+        : concreteTurns.findIndex((turn) => turn.checkpointTurnCount === event.payload.turnCount);
+    if (event.payload.turnCount > 0 && retainedTurnIndex < 0) {
+      yield* appendRevertFailureActivity({
+        threadId: event.payload.threadId,
+        turnCount: event.payload.turnCount,
+        detail: `Projection turn for checkpoint ${event.payload.turnCount} is unavailable.`,
+        createdAt: now,
+      }).pipe(Effect.catch(() => Effect.void));
+      return;
+    }
+    const discardedTurns = concreteTurns.slice(retainedTurnIndex + 1);
+    const firstDiscardedTurnId = discardedTurns[0]?.turnId ?? undefined;
+
     const session = yield* providerService.ensureSession(event.payload.threadId);
     const projects = yield* resolveThreadProjects(thread.projectId);
     const checkpointCwd =
@@ -770,11 +792,8 @@ const make = Effect.gen(function* () {
     // reflects the reverted filesystem state.
     yield* workspaceEntries.refresh(checkpointCwd);
 
-    const rolledBackTurns = Math.max(0, currentTurnCount - event.payload.turnCount);
+    const rolledBackTurns = discardedTurns.length;
     if (rolledBackTurns > 0) {
-      const firstDiscardedTurnId = thread.checkpoints
-        .filter((checkpoint) => checkpoint.checkpointTurnCount > event.payload.turnCount)
-        .toSorted((left, right) => left.checkpointTurnCount - right.checkpointTurnCount)[0]?.turnId;
       yield* providerService.rollbackConversation({
         threadId: event.payload.threadId,
         numTurns: rolledBackTurns,
