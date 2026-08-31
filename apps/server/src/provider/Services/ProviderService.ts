@@ -115,6 +115,16 @@ export interface ProviderServiceShape {
   readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
 
   /**
+   * Ensure a provider session is active for a durably bound thread.
+   *
+   * Adopts an existing adapter session or resumes it from persisted provider
+   * state, then returns the active session metadata.
+   */
+  readonly ensureSession: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ProviderSession, ProviderServiceError>;
+
+  /**
    * Read capabilities for the adapter bound to a configured provider instance.
    */
   readonly getCapabilities: (

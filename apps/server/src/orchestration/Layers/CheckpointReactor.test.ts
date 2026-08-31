@@ -55,6 +55,7 @@ import {
   ProviderService,
   type ProviderServiceShape,
 } from "../../provider/Services/ProviderService.ts";
+import { ProviderValidationError } from "../../provider/Errors.ts";
 import { checkpointRefForThreadTurn } from "../../checkpointing/Utils.ts";
 import { ServerConfig } from "../../config.ts";
 import * as WorkspaceEntries from "../../workspace/WorkspaceEntries.ts";
@@ -81,6 +82,7 @@ function createProviderServiceHarness(
   hasSession = true,
   sessionCwd = cwd,
   providerName: ProviderSession["provider"] = ProviderDriverKind.make("codex"),
+  canRecoverSession = true,
 ) {
   const now = "2026-01-01T00:00:00.000Z";
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
@@ -90,20 +92,29 @@ function createProviderServiceHarness(
 
   const unsupported = <A>() =>
     Effect.die(new Error("Unsupported provider call in test")) as Effect.Effect<A, never>;
+  const session = {
+    provider: providerName,
+    status: "ready",
+    runtimeMode: "full-access",
+    threadId: ThreadId.make("thread-1"),
+    cwd: sessionCwd,
+    createdAt: now,
+    updatedAt: now,
+  } satisfies ProviderSession;
   const listSessions = () =>
     hasSession
-      ? Effect.succeed([
-          {
-            provider: providerName,
-            status: "ready",
-            runtimeMode: "full-access",
-            threadId: ThreadId.make("thread-1"),
-            cwd: sessionCwd,
-            createdAt: now,
-            updatedAt: now,
-          },
-        ] satisfies ReadonlyArray<ProviderSession>)
+      ? Effect.succeed([session] satisfies ReadonlyArray<ProviderSession>)
       : Effect.succeed([] as ReadonlyArray<ProviderSession>);
+  const ensureSession = vi.fn((_threadId: ThreadId) =>
+    canRecoverSession
+      ? Effect.succeed(session)
+      : Effect.fail(
+          new ProviderValidationError({
+            operation: "ProviderService.ensureSession",
+            issue: "No persisted provider binding exists.",
+          }),
+        ),
+  );
   const service: ProviderServiceShape = {
     startSession: () => unsupported(),
     sendTurn: () => unsupported(),
@@ -112,6 +123,7 @@ function createProviderServiceHarness(
     respondToUserInput: () => unsupported(),
     stopSession: () => unsupported(),
     listSessions,
+    ensureSession,
     getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
     getInstanceInfo: (instanceId) =>
       Effect.succeed({
@@ -137,6 +149,7 @@ function createProviderServiceHarness(
 
   return {
     service,
+    ensureSession,
     rollbackConversation,
     emit,
   };
@@ -287,6 +300,7 @@ describe("CheckpointReactor", () => {
     readonly providerName?: ProviderDriverKind;
     readonly gitStatusRefreshCalls?: Array<string>;
     readonly nestedWorkspace?: boolean;
+    readonly canRecoverSession?: boolean;
   }) {
     const cwd = createGitRepository();
     tempDirs.push(cwd);
@@ -302,6 +316,7 @@ describe("CheckpointReactor", () => {
       options?.hasSession ?? true,
       options?.providerSessionCwd ?? workspaceCwd,
       options?.providerName ?? ProviderDriverKind.make("codex"),
+      options?.canRecoverSession ?? true,
     );
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
@@ -465,6 +480,7 @@ describe("CheckpointReactor", () => {
       cwd,
       workspaceCwd,
       drain,
+      runPromise: runtime.runPromise,
     };
   }
 
@@ -1301,27 +1317,66 @@ describe("CheckpointReactor", () => {
     });
   });
 
-  it("appends an error activity when revert is requested without an active session", async () => {
+  it("recovers a stopped provider session before reverting its checkpoint", async () => {
     const harness = await createHarness({ hasSession: false });
     const createdAt = "2026-01-01T00:00:00.000Z";
 
-    await Effect.runPromise(
+    await harness.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.make("cmd-recovery-diff-1"),
+        threadId: ThreadId.make("thread-1"),
+        turnId: asTurnId("turn-1"),
+        completedAt: createdAt,
+        checkpointRef: checkpointRefForThreadTurn(ThreadId.make("thread-1"), 1),
+        status: "ready",
+        files: [],
+        checkpointTurnCount: 1,
+        createdAt,
+      }),
+    );
+    await harness.runPromise(
       harness.engine.dispatch({
         type: "thread.checkpoint.revert",
-        commandId: CommandId.make("cmd-revert-no-session"),
+        commandId: CommandId.make("cmd-revert-stopped-session"),
         threadId: ThreadId.make("thread-1"),
-        turnCount: 1,
+        turnCount: 0,
         createdAt,
       }),
     );
 
-    const thread = await waitForThread(harness.readModel, (entry) =>
+    await waitForEvent(harness.engine, (event) => event.type === "thread.reverted");
+
+    expect(harness.provider.ensureSession).toHaveBeenCalledWith(ThreadId.make("thread-1"));
+    expect(harness.provider.rollbackConversation).toHaveBeenCalledWith({
+      threadId: ThreadId.make("thread-1"),
+      numTurns: 1,
+    });
+    expect(NodeFS.readFileSync(NodePath.join(harness.cwd, "README.md"), "utf8")).toBe("v1\n");
+  });
+
+  it("leaves the filesystem unchanged when the provider session cannot be recovered", async () => {
+    const harness = await createHarness({
+      hasSession: false,
+      canRecoverSession: false,
+    });
+    const createdAt = "2026-01-01T00:00:00.000Z";
+
+    await harness.runPromise(
+      harness.engine.dispatch({
+        type: "thread.checkpoint.revert",
+        commandId: CommandId.make("cmd-revert-unbound-session"),
+        threadId: ThreadId.make("thread-1"),
+        turnCount: 0,
+        createdAt,
+      }),
+    );
+
+    await waitForThread(harness.readModel, (entry) =>
       entry.activities.some((activity) => activity.kind === "checkpoint.revert.failed"),
     );
 
-    expect(thread.activities.some((activity) => activity.kind === "checkpoint.revert.failed")).toBe(
-      true,
-    );
+    expect(NodeFS.readFileSync(NodePath.join(harness.cwd, "README.md"), "utf8")).toBe("v3\n");
     expect(harness.provider.rollbackConversation).not.toHaveBeenCalled();
   });
 });

@@ -1452,6 +1452,41 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("ensures a stopped persisted session by resuming its thread identity", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+
+      const initial = yield* provider.startSession(asThreadId("thread-ensure"), {
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId: asThreadId("thread-ensure"),
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+      yield* routing.codex.stopSession(initial.threadId);
+      routing.codex.startSession.mockClear();
+
+      const recovered = yield* provider.ensureSession(initial.threadId);
+
+      assert.equal(recovered.threadId, initial.threadId);
+      assert.equal(recovered.cwd, "/tmp/project");
+      assert.equal(recovered.providerInstanceId, codexInstanceId);
+      assert.equal(routing.codex.startSession.mock.calls.length, 1);
+      const resumedStartInput = routing.codex.startSession.mock.calls[0]?.[0];
+      assert.equal(typeof resumedStartInput === "object" && resumedStartInput !== null, true);
+      if (resumedStartInput && typeof resumedStartInput === "object") {
+        const startPayload = resumedStartInput as {
+          cwd?: string;
+          resumeCursor?: unknown;
+          threadId?: string;
+        };
+        assert.equal(startPayload.cwd, "/tmp/project");
+        assert.deepEqual(startPayload.resumeCursor, initial.resumeCursor);
+        assert.equal(startPayload.threadId, initial.threadId);
+      }
+    }),
+  );
+
   it.effect("preserves the persisted binding when stopping a session", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;

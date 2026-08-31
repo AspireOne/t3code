@@ -1182,6 +1182,31 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
+  const ensureSession: ProviderServiceMethod<"ensureSession"> = Effect.fn("ensureSession")(
+    function* (threadId) {
+      const bindingOption = yield* directory.getBinding(threadId);
+      const binding = Option.getOrUndefined(bindingOption);
+      if (!binding) {
+        return yield* toValidationError(
+          "ProviderService.ensureSession",
+          `Cannot recover thread '${threadId}' because no persisted provider binding exists.`,
+        );
+      }
+      const providerInstanceId = yield* requireBindingInstanceId(
+        "ProviderService.ensureSession",
+        binding,
+      );
+      const recovered = yield* recoverSessionForThread({
+        binding,
+        operation: "ProviderService.ensureSession",
+      });
+      return {
+        ...recovered.session,
+        providerInstanceId,
+      };
+    },
+  );
+
   const getCapabilities: ProviderServiceMethod<"getCapabilities"> = (instanceId) =>
     registry.getByInstance(instanceId).pipe(Effect.map((adapter) => adapter.capabilities));
 
@@ -1341,6 +1366,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     respondToUserInput,
     stopSession,
     listSessions,
+    ensureSession,
     getCapabilities,
     getInstanceInfo,
     rollbackConversation,
