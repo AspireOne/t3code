@@ -273,12 +273,24 @@ export function applyServerConfigProjection(
   event: ServerConfigStreamEvent,
 ): Option.Option<ServerConfigProjection> {
   switch (event.type) {
-    case "snapshot":
+    case "snapshot": {
+      // A snapshot never carries published themes -- the theme stream owns
+      // them -- so taking it wholesale would clear the set on every reconnect
+      // and repaint anyone wearing one until the follow-up event landed.
+      // Only from a server that still streams them. Reconnecting to one that
+      // predates the feature must drop the set rather than leave a palette on
+      // screen that nothing will ever update again.
+      const carried =
+        event.config.environment.capabilities.environmentThemes === true && Option.isSome(current)
+          ? current.value.config.environmentThemes
+          : undefined;
       return Option.some({
-        config: event.config,
+        config:
+          carried === undefined ? event.config : { ...event.config, environmentThemes: carried },
         latestEvent: event,
-        source: "live",
+        source: "live" as const,
       });
+    }
     case "keybindingsUpdated":
       return Option.map(current, (projection) => ({
         config: {
@@ -307,6 +319,15 @@ export function applyServerConfigProjection(
         latestEvent: event,
         source: "live",
       }));
+    case "environmentThemesUpdated":
+      return Option.map(current, (projection) => ({
+        config: {
+          ...projection.config,
+          environmentThemes: event.payload.themes.length > 0 ? event.payload.themes : undefined,
+        },
+        latestEvent: event,
+        source: "live",
+      }));
   }
 }
 
@@ -325,27 +346,26 @@ const cachedConfigSnapshotEvent = (config: ServerConfig): ServerConfigStreamEven
 });
 
 export function stripEphemeralServerConfig(config: ServerConfig): ServerConfig {
-  let changed = false;
+  let providersChanged = false;
   const providers = config.providers.map((provider) => {
     if (!("rateLimits" in provider)) return provider;
-    changed = true;
+    providersChanged = true;
     const { rateLimits: _rateLimits, ...persistentProvider } = provider;
     return persistentProvider;
   });
-  if (!changed) return config;
-  return {
-    ...config,
-    providers,
-  };
+  const withoutRateLimits = providersChanged ? { ...config, providers } : config;
+  if (withoutRateLimits.environmentThemes === undefined) return withoutRateLimits;
+  const { environmentThemes: _environmentThemes, ...persistentConfig } = withoutRateLimits;
+  return persistentConfig;
 }
 
 /**
- * Keeps durable server configuration available during reconnects. The
- * provider/model catalogue is retained, while account-bound rate limits are
- * removed and must be revalidated by a live server session.
+ * Keeps durable server configuration available during reconnects. Provider
+ * rate limits must be revalidated by a live session, while published themes
+ * disappear when the environment stops publishing them.
  */
 export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConfigState.make")(
-  function* () {
+  function* (environmentThemes?: boolean) {
     const supervisor = yield* EnvironmentSupervisor;
     const cache = yield* EnvironmentCacheStore;
     const environmentId = supervisor.target.environmentId;
@@ -405,7 +425,10 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
       Effect.forkScoped,
     );
 
-    yield* subscribe(WS_METHODS.subscribeServerConfig, {}).pipe(
+    yield* subscribe(
+      WS_METHODS.subscribeServerConfig,
+      environmentThemes === true ? { environmentThemes: true } : {},
+    ).pipe(
       Stream.runForEach((event) =>
         Effect.gen(function* () {
           const next = applyServerConfigProjection(yield* SubscriptionRef.get(state), event);
@@ -435,11 +458,14 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
   },
 );
 
-export function serverConfigStateChanges(environmentId: EnvironmentId) {
+export function serverConfigStateChanges(
+  environmentId: EnvironmentId,
+  environmentThemes?: boolean,
+) {
   return followStreamInEnvironment(
     environmentId,
     Stream.unwrap(
-      makeEnvironmentServerConfigState().pipe(
+      makeEnvironmentServerConfigState(environmentThemes).pipe(
         Effect.map((state) =>
           SubscriptionRef.changes(state).pipe(
             Stream.filterMap((projection) =>
@@ -492,6 +518,12 @@ export function createServerEnvironmentAtoms<R, E>(
     readonly initialConfigValueAtom: (
       environmentId: EnvironmentId,
     ) => Atom.Atom<ServerConfig | null>;
+    /**
+     * Whether this surface renders themes the environment publishes. Mobile
+     * keeps its own appearance settings, so it neither asks for the stream nor
+     * receives the payload.
+     */
+    readonly environmentThemes?: boolean;
   },
 ) {
   const configScheduler = createAtomCommandScheduler();
@@ -503,7 +535,7 @@ export function createServerEnvironmentAtoms<R, E>(
   };
   const configProjectionFamily = Atom.family((environmentId: EnvironmentId) =>
     runtime
-      .atom(serverConfigStateChanges(environmentId))
+      .atom(serverConfigStateChanges(environmentId, options.environmentThemes))
       .pipe(
         Atom.setIdleTTL(5 * 60_000),
         Atom.withLabel(`environment-data:server:config-projection:${environmentId}`),
