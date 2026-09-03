@@ -713,6 +713,12 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverGetUsageSummary,
       staleTimeMs: 60_000,
     }),
+    sessionRateLimits: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:provider:session-rate-limits",
+      tag: WS_METHODS.providerReadSessionRateLimits,
+      staleTimeMs: 0,
+      refreshIntervalMs: 30_000,
+    }),
     configProjection,
     welcome: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:welcome",

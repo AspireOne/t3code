@@ -35,7 +35,6 @@ import {
   type OrchestrationEvent,
   type OrchestrationShellStreamEvent,
   type OrchestrationShellStreamItem,
-  type OrchestrationThreadStreamItem,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetSnapshotError,
   OrchestrationSearchThreadsError,
@@ -51,6 +50,7 @@ import {
   ProjectSearchEntriesError,
   ProjectWriteFileError,
   ProviderUploadFeedbackError,
+  ProviderSessionRateLimitsError,
   type ProviderInstanceId,
   RelayClientInstallFailedError,
   type RelayClientInstallProgressEvent,
@@ -1812,6 +1812,20 @@ const makeWsRpcLayer = (
               Effect.mapError(
                 (cause) =>
                   new ProviderUploadFeedbackError({
+                    threadId: input.threadId,
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "provider" },
+          ),
+        [WS_METHODS.providerReadSessionRateLimits]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerReadSessionRateLimits,
+            providerService.readSessionRateLimits(input.threadId).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderSessionRateLimitsError({
                     threadId: input.threadId,
                     cause,
                   }),

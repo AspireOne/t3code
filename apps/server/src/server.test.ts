@@ -4727,6 +4727,40 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("reads live thread rate limits through websocket rpc", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread-session-rate-limits");
+      const rateLimits = {
+        fetchedAt: "2026-09-03T10:00:00.000Z",
+        windows: [
+          {
+            windowDurationMins: 300,
+            usedPercent: 37,
+            resetsAt: "2030-03-17T17:46:40.000Z",
+          },
+        ],
+      };
+      const readSessionRateLimits = vi.fn<
+        ProviderService.ProviderService["Service"]["readSessionRateLimits"]
+      >(() => Effect.succeed(rateLimits));
+      yield* buildAppUnderTest({
+        layers: {
+          providerService: { readSessionRateLimits },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.providerReadSessionRateLimits]({ threadId }),
+        ),
+      );
+
+      assert.deepStrictEqual(response, rateLimits);
+      assert.deepStrictEqual(readSessionRateLimits.mock.calls, [[threadId]]);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("uploads image bytes through a signed URL issued by websocket rpc", () =>
     Effect.gen(function* () {
       const config = yield* buildAppUnderTest();

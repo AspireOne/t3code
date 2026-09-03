@@ -1184,6 +1184,18 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
+  const readSessionRateLimits: ProviderServiceMethod<"readSessionRateLimits"> = Effect.fn(
+    "readSessionRateLimits",
+  )(function* (threadId) {
+    const routed = yield* resolveRoutableSession({
+      threadId,
+      operation: "ProviderService.readSessionRateLimits",
+      allowRecovery: false,
+    });
+    if (!routed.isActive || routed.adapter.readSessionRateLimits === undefined) return null;
+    return yield* routed.adapter.readSessionRateLimits(threadId);
+  });
+
   const ensureSession: ProviderServiceMethod<"ensureSession"> = Effect.fn("ensureSession")(
     function* (threadId) {
       const bindingOption = yield* directory.getBinding(threadId);
@@ -1368,6 +1380,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     respondToUserInput,
     stopSession,
     listSessions,
+    readSessionRateLimits,
     ensureSession,
     getCapabilities,
     getInstanceInfo,

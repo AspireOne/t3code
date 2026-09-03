@@ -611,6 +611,9 @@ const make = Effect.gen(function* () {
           runtimeMode: desiredRuntimeMode,
           activeTurnId: null,
           lastError: null,
+          ...(thread.session?.startedAt !== undefined
+            ? { startedAt: thread.session.startedAt }
+            : {}),
           updatedAt: createdAt,
         },
         createdAt,
@@ -697,6 +700,7 @@ const make = Effect.gen(function* () {
             // Provider turn ids are not orchestration turn ids.
             activeTurnId: null,
             lastError: session.lastError ?? null,
+            startedAt: session.createdAt,
             updatedAt: session.updatedAt,
           },
           createdAt,
@@ -1487,6 +1491,7 @@ const make = Effect.gen(function* () {
         runtimeMode: thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
         activeTurnId: null,
         lastError: thread.session?.lastError ?? null,
+        ...(thread.session?.startedAt !== undefined ? { startedAt: thread.session.startedAt } : {}),
         updatedAt: now,
       },
       createdAt: now,

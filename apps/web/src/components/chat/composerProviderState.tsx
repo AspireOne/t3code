@@ -2,7 +2,9 @@ import {
   type ProviderDriverKind,
   type ProviderInstanceId,
   type ProviderOptionSelection,
+  type OrchestrationSession,
   type ScopedThreadRef,
+  type ServerProviderRateLimits,
   type ServerProviderModel,
 } from "@t3tools/contracts";
 import {
@@ -28,6 +30,27 @@ export type ComposerProviderStateInput = {
 };
 
 export type ComposerPromptInjectionState = "none" | "ultrathink";
+
+export function resolveComposerCodexRateLimits(input: {
+  provider: ProviderDriverKind;
+  session: OrchestrationSession | null;
+  sessionRateLimits: ServerProviderRateLimits | null;
+  providerRateLimits: ServerProviderRateLimits | null;
+}): ServerProviderRateLimits | null {
+  if (input.provider !== "codex") return null;
+
+  const session = input.session;
+  if (session === null) return input.providerRateLimits;
+  const status = session.status;
+  if (status === "idle" || status === "stopped") return input.providerRateLimits;
+  if (status !== "ready" && status !== "running") return null;
+
+  const fetchedAt = Date.parse(input.sessionRateLimits?.fetchedAt ?? "");
+  const sessionStartedAt = Date.parse(session.startedAt ?? session.updatedAt);
+  return Number.isFinite(fetchedAt) && fetchedAt > sessionStartedAt
+    ? input.sessionRateLimits
+    : null;
+}
 
 export type ComposerProviderState = {
   provider: ProviderDriverKind;

@@ -15,6 +15,7 @@ import type {
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
   ProviderSession,
+  ServerProviderRateLimits,
   ProviderSessionStartInput,
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
@@ -131,6 +132,11 @@ export interface ProviderAdapterShape<TError> {
    * Check whether this adapter owns an active session id.
    */
   readonly hasSession: (threadId: ThreadId) => Effect.Effect<boolean>;
+
+  /** Read account quota through this thread's already-running provider session. */
+  readonly readSessionRateLimits?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ServerProviderRateLimits | null, TError>;
 
   /**
    * Read a provider thread snapshot.

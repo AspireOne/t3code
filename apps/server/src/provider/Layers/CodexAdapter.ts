@@ -2164,6 +2164,27 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const hasSession: CodexAdapterShape["hasSession"] = (threadId) =>
     Effect.succeed(Boolean(sessions.get(threadId) && !sessions.get(threadId)?.stopped));
 
+  const readSessionRateLimits: NonNullable<CodexAdapterShape["readSessionRateLimits"]> = (
+    threadId,
+  ) => {
+    const session = sessions.get(threadId);
+    if (!session || session.stopped) return Effect.succeed(null);
+    return session.runtime.readRateLimits.pipe(
+      Effect.map((rateLimits) =>
+        sessions.get(threadId) === session && !session.stopped ? rateLimits : null,
+      ),
+      Effect.mapError(
+        (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "account/rateLimits/read",
+            detail: cause.message,
+            cause,
+          }),
+      ),
+    );
+  };
+
   const stopAll: CodexAdapterShape["stopAll"] = () =>
     Effect.forEach(Array.from(sessions.values()), stopSessionInternal, {
       concurrency: 1,
@@ -2198,6 +2219,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     stopSession,
     listSessions,
     hasSession,
+    readSessionRateLimits,
     stopAll,
     get streamEvents() {
       return Stream.fromQueue(runtimeEventQueue);

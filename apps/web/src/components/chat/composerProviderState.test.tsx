@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   ProviderDriverKind,
+  ProviderInstanceId,
+  ThreadId,
+  type OrchestrationSession,
   type ProviderOptionDescriptor,
   type ProviderOptionSelection,
   type ServerProviderModel,
+  type ServerProviderRateLimits,
 } from "@t3tools/contracts";
 import {
   getComposerPromptInjectionState,
   getComposerProviderState,
+  resolveComposerCodexRateLimits,
   renderProviderTraitsMenuContent,
   renderProviderTraitsPicker,
 } from "./composerProviderState";
@@ -18,6 +23,119 @@ import {
 
 const PROVIDER: ProviderDriverKind = ProviderDriverKind.make("codex");
 const MODEL = "test-model";
+
+const limits = (usedPercent: number, fetchedAt: string): ServerProviderRateLimits => ({
+  fetchedAt,
+  windows: [
+    {
+      windowDurationMins: 300,
+      usedPercent,
+      resetsAt: "2030-03-17T17:46:40.000Z",
+    },
+  ],
+});
+
+const session = (
+  status: OrchestrationSession["status"],
+  startedAt = "2026-09-03T10:00:00.000Z",
+  updatedAt = startedAt,
+): OrchestrationSession => ({
+  threadId: ThreadId.make("quota-thread"),
+  status,
+  providerName: "codex",
+  providerInstanceId: ProviderInstanceId.make("codex"),
+  runtimeMode: "full-access",
+  activeTurnId: null,
+  lastError: null,
+  startedAt,
+  updatedAt,
+});
+
+describe("resolveComposerCodexRateLimits", () => {
+  const oldAccount = limits(81, "2026-09-03T10:01:00.000Z");
+  const newGlobalAccount = limits(24, "2026-09-03T10:02:00.000Z");
+
+  it("uses the live session quota when the global provider account differs", () => {
+    expect(
+      resolveComposerCodexRateLimits({
+        provider: PROVIDER,
+        session: session("running"),
+        sessionRateLimits: oldAccount,
+        providerRateLimits: newGlobalAccount,
+      }),
+    ).toBe(oldAccount);
+  });
+
+  it("never falls back to global quota for a starting, failed, or unreadable live session", () => {
+    for (const status of ["starting", "ready", "running", "interrupted", "error"] as const) {
+      expect(
+        resolveComposerCodexRateLimits({
+          provider: PROVIDER,
+          session: session(status),
+          sessionRateLimits: null,
+          providerRateLimits: newGlobalAccount,
+        }),
+      ).toBeNull();
+    }
+  });
+
+  it("rejects quota cached before the current session generation", () => {
+    expect(
+      resolveComposerCodexRateLimits({
+        provider: PROVIDER,
+        session: session("ready", "2026-09-03T10:03:00.000Z"),
+        sessionRateLimits: oldAccount,
+        providerRateLimits: newGlobalAccount,
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects an old runtime response completed in the restart millisecond", () => {
+    expect(
+      resolveComposerCodexRateLimits({
+        provider: PROVIDER,
+        session: session("ready", oldAccount.fetchedAt),
+        sessionRateLimits: oldAccount,
+        providerRateLimits: newGlobalAccount,
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps exact-session quota across ordinary turn state updates", () => {
+    expect(
+      resolveComposerCodexRateLimits({
+        provider: PROVIDER,
+        session: session("running", "2026-09-03T10:00:00.000Z", "2026-09-03T10:03:00.000Z"),
+        sessionRateLimits: oldAccount,
+        providerRateLimits: newGlobalAccount,
+      }),
+    ).toBe(oldAccount);
+  });
+
+  it("uses provider quota only when no Codex app-server is active", () => {
+    for (const status of [null, "idle", "stopped"] as const) {
+      expect(
+        resolveComposerCodexRateLimits({
+          provider: PROVIDER,
+          session: status === null ? null : session(status),
+          sessionRateLimits: oldAccount,
+          providerRateLimits: newGlobalAccount,
+        }),
+      ).toBe(newGlobalAccount);
+    }
+  });
+
+  it("does not expose quota for other providers", () => {
+    expect(
+      resolveComposerCodexRateLimits({
+        provider: ProviderDriverKind.make("claudeAgent"),
+        session: null,
+        sessionRateLimits: oldAccount,
+        providerRateLimits: newGlobalAccount,
+      }),
+    ).toBeNull();
+  });
+});
 
 function selectDescriptor(
   id: string,

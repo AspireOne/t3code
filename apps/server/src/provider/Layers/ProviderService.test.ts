@@ -8,6 +8,7 @@ import type {
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
   ProviderSession,
+  ServerProviderRateLimits,
   ProviderTurnStartResult,
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
@@ -74,6 +75,7 @@ const asEventId = (value: string): EventId => EventId.make(value);
 const asThreadId = (value: string): ThreadId => ThreadId.make(value);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
 const codexInstanceId = ProviderInstanceId.make("codex");
+const codexWorkInstanceId = ProviderInstanceId.make("codex_work");
 const claudeAgentInstanceId = ProviderInstanceId.make("claudeAgent");
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
 const CLAUDE_AGENT_DRIVER = ProviderDriverKind.make("claudeAgent");
@@ -224,6 +226,11 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
       Effect.succeed({ feedbackId: `feedback-${input.threadId}` }),
   );
 
+  const rateLimitsByThread = new Map<ThreadId, ServerProviderRateLimits>();
+  const readSessionRateLimits = vi.fn((threadId: ThreadId) =>
+    Effect.succeed(sessions.has(threadId) ? (rateLimitsByThread.get(threadId) ?? null) : null),
+  );
+
   const stopAll = vi.fn(
     (): Effect.Effect<void, ProviderAdapterError> =>
       Effect.sync(() => {
@@ -248,7 +255,7 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     hasSession,
     readThread,
     rollbackThread,
-    ...(provider === CODEX_DRIVER ? { uploadFeedback } : {}),
+    ...(provider === CODEX_DRIVER ? { uploadFeedback, readSessionRateLimits } : {}),
     stopAll,
     get streamEvents() {
       return Stream.fromPubSub(runtimeEventPubSub);
@@ -287,6 +294,10 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     forkThread,
     deleteThread,
     uploadFeedback,
+    readSessionRateLimits,
+    setRateLimits: (threadId: ThreadId, rateLimits: ServerProviderRateLimits) => {
+      rateLimitsByThread.set(threadId, rateLimits);
+    },
     stopAll,
   };
 }
@@ -393,13 +404,38 @@ const hasMetricSnapshot = (
 
 function makeProviderServiceLayer() {
   const codex = makeFakeCodexAdapter();
+  const codexWork = makeFakeCodexAdapter();
   const claude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
   const cursor = makeFakeCodexAdapter(CURSOR_DRIVER);
-  const registry = makeAdapterRegistryMock({
+  const defaultRegistry = makeAdapterRegistryMock({
     [ProviderDriverKind.make("codex")]: codex.adapter,
     [ProviderDriverKind.make("claudeAgent")]: claude.adapter,
     [ProviderDriverKind.make("cursor")]: cursor.adapter,
   });
+  const registry: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"] = {
+    ...defaultRegistry,
+    getByInstance: (instanceId) =>
+      instanceId === codexWorkInstanceId
+        ? Effect.succeed(codexWork.adapter)
+        : defaultRegistry.getByInstance(instanceId),
+    getInstanceInfo: (instanceId) =>
+      instanceId === codexWorkInstanceId
+        ? Effect.succeed({
+            instanceId,
+            driverKind: CODEX_DRIVER,
+            displayName: "Codex Work",
+            enabled: true,
+            continuationIdentity: {
+              driverKind: CODEX_DRIVER,
+              continuationKey: "codex:home:/work-codex",
+            },
+          })
+        : defaultRegistry.getInstanceInfo(instanceId),
+    listInstances: () =>
+      defaultRegistry
+        .listInstances()
+        .pipe(Effect.map((instanceIds) => [...instanceIds, codexWorkInstanceId])),
+  };
 
   const providerAdapterLayer = Layer.succeed(
     ProviderAdapterRegistry.ProviderAdapterRegistry,
@@ -434,6 +470,7 @@ function makeProviderServiceLayer() {
 
   return {
     codex,
+    codexWork,
     claude,
     cursor,
     layer,
@@ -1036,6 +1073,89 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect("routes rate-limit reads through the thread's configured Codex instance", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const personalThreadId = asThreadId("quota-instance-personal");
+      const workThreadId = asThreadId("quota-instance-work");
+      yield* provider.startSession(personalThreadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId: personalThreadId,
+        runtimeMode: "full-access",
+      });
+      yield* provider.startSession(workThreadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexWorkInstanceId,
+        threadId: workThreadId,
+        runtimeMode: "full-access",
+      });
+      routing.codex.setRateLimits(personalThreadId, providerRateLimits(79));
+      routing.codexWork.setRateLimits(workThreadId, providerRateLimits(18));
+
+      assert.equal(
+        (yield* provider.readSessionRateLimits(personalThreadId))?.windows[0]?.usedPercent,
+        79,
+      );
+      assert.equal(
+        (yield* provider.readSessionRateLimits(workThreadId))?.windows[0]?.usedPercent,
+        18,
+      );
+      assert.deepStrictEqual(routing.codex.readSessionRateLimits.mock.calls, [[personalThreadId]]);
+      assert.deepStrictEqual(routing.codexWork.readSessionRateLimits.mock.calls, [[workThreadId]]);
+      yield* provider.stopSession({ threadId: personalThreadId });
+      yield* provider.stopSession({ threadId: workThreadId });
+    }),
+  );
+
+  it.effect("keeps rate-limit reads bound to their active sessions", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const firstThreadId = asThreadId("quota-session-first");
+      const secondThreadId = asThreadId("quota-session-second");
+      for (const threadId of [firstThreadId, secondThreadId]) {
+        yield* provider.startSession(threadId, {
+          provider: CODEX_DRIVER,
+          providerInstanceId: codexInstanceId,
+          threadId,
+          runtimeMode: "full-access",
+        });
+      }
+      routing.codex.setRateLimits(firstThreadId, providerRateLimits(79));
+      routing.codex.setRateLimits(secondThreadId, providerRateLimits(18));
+
+      assert.equal(
+        (yield* provider.readSessionRateLimits(firstThreadId))?.windows[0]?.usedPercent,
+        79,
+      );
+      assert.equal(
+        (yield* provider.readSessionRateLimits(secondThreadId))?.windows[0]?.usedPercent,
+        18,
+      );
+      yield* provider.stopSession({ threadId: firstThreadId });
+      yield* provider.stopSession({ threadId: secondThreadId });
+    }),
+  );
+
+  it.effect("does not recover a stopped session to read rate limits", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("quota-session-stopped");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      routing.codex.setRateLimits(threadId, providerRateLimits(55));
+      yield* routing.codex.stopSession(threadId);
+      routing.codex.startSession.mockClear();
+
+      assert.equal(yield* provider.readSessionRateLimits(threadId), null);
+      assert.equal(routing.codex.startSession.mock.calls.length, 0);
+    }),
+  );
+
   it.effect("persists a native fork as an independently resumable stopped binding", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;
@@ -2074,6 +2194,19 @@ routing.layer("ProviderServiceLive routing", (it) => {
       }).pipe(Effect.provide(NodeServices.layer)),
   );
 });
+
+function providerRateLimits(usedPercent: number): ServerProviderRateLimits {
+  return {
+    fetchedAt: "2026-09-03T10:00:00.000Z",
+    windows: [
+      {
+        windowDurationMins: 300,
+        usedPercent,
+        resetsAt: "2030-03-17T17:46:40.000Z",
+      },
+    ],
+  };
+}
 
 const fanout = makeProviderServiceLayer();
 fanout.layer("ProviderServiceLive fanout", (it) => {

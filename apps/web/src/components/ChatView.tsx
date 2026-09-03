@@ -12,6 +12,7 @@ import {
   type PreviewAnnotationPayload,
   ProviderInstanceId,
   type ServerProvider,
+  type ServerProviderRateLimits,
   type ResolvedKeybindingsConfig,
   type ScopedThreadRef,
   type ThreadId,
@@ -2388,6 +2389,36 @@ function ChatViewContent(props: ChatViewProps) {
     () => deriveLatestContextWindowSnapshot(threadActivities),
     [threadActivities],
   );
+  const activeSessionRateLimitsAtom = useMemo(() => {
+    const session = activeThread?.session;
+    if (
+      !activeThread ||
+      session?.providerName !== "codex" ||
+      (session.status !== "ready" && session.status !== "running")
+    ) {
+      return null;
+    }
+    return serverEnvironment.sessionRateLimits({
+      environmentId: activeThread.environmentId,
+      input: { threadId: activeThread.id },
+    });
+  }, [
+    activeThread?.environmentId,
+    activeThread?.id,
+    activeThread?.session?.providerName,
+    activeThread?.session?.status,
+  ]);
+  const activeSessionRateLimitsQuery = useEnvironmentQuery(activeSessionRateLimitsAtom);
+  useEffect(() => {
+    if (activeSessionRateLimitsAtom === null) return;
+    activeSessionRateLimitsQuery.refresh();
+  }, [
+    activeSessionRateLimitsAtom,
+    activeSessionRateLimitsQuery.refresh,
+    activeThread?.session?.updatedAt,
+  ]);
+  const activeSessionRateLimits: ServerProviderRateLimits | null =
+    activeSessionRateLimitsQuery.data;
   const workLogEntries = useMemo(() => deriveWorkLogEntries(threadActivities), [threadActivities]);
   useEffect(() => {
     if (!compactionSubmission || compactionSubmission.status !== "compacting") return;
@@ -7605,6 +7636,7 @@ function ChatViewContent(props: ChatViewProps) {
                               activeProject?.defaultModelSelection
                             }
                             activeThreadModelSelection={activeThread?.modelSelection}
+                            activeSessionRateLimits={activeSessionRateLimits}
                             activeContextWindow={activeContextWindow}
                             compactDisabled={compactDisabled}
                             compactDisabledReason={compactDisabledReason}

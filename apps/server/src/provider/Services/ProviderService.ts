@@ -20,6 +20,7 @@ import type {
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
   ProviderSession,
+  ServerProviderRateLimits,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
   ProviderUploadFeedbackInput,
@@ -113,6 +114,11 @@ export interface ProviderServiceShape {
    * Aggregates runtime session lists from all registered adapters.
    */
   readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
+
+  /** Read quota from the exact live provider session without recovering it. */
+  readonly readSessionRateLimits: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ServerProviderRateLimits | null, ProviderServiceError>;
 
   /**
    * Ensure a provider session is active for a durably bound thread.

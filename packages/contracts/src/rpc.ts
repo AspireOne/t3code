@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
+import { ThreadId } from "./baseSchemas.ts";
 
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
 import {
@@ -75,10 +76,12 @@ import {
   OrchestrationGetWorkflowScriptError,
 } from "./orchestration.ts";
 import {
+  ProviderSessionRateLimitsError,
   ProviderUploadFeedbackError,
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
 } from "./provider.ts";
+import { ServerProviderRateLimits } from "./server.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
   PullRequestActionInput,
@@ -227,6 +230,7 @@ export const WS_METHODS = {
   attachmentsDelete: "attachments.delete",
 
   // Provider methods
+  providerReadSessionRateLimits: "provider.readSessionRateLimits",
   providerUploadFeedback: "provider.uploadFeedback",
 
   // VCS methods
@@ -700,6 +704,15 @@ export const WsProviderUploadFeedbackRpc = Rpc.make(WS_METHODS.providerUploadFee
   error: Schema.Union([ProviderUploadFeedbackError, EnvironmentAuthorizationError]),
 });
 
+export const WsProviderReadSessionRateLimitsRpc = Rpc.make(
+  WS_METHODS.providerReadSessionRateLimits,
+  {
+    payload: Schema.Struct({ threadId: ThreadId }),
+    success: Schema.NullOr(ServerProviderRateLimits),
+    error: Schema.Union([ProviderSessionRateLimitsError, EnvironmentAuthorizationError]),
+  },
+);
+
 export const WsSubscribeVcsStatusRpc = Rpc.make(WS_METHODS.subscribeVcsStatus, {
   payload: VcsStatusInput,
   success: VcsStatusStreamEvent,
@@ -1080,6 +1093,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsAssetsCreateUrlRpc,
   WsAttachmentsCreateUploadUrlRpc,
   WsAttachmentsDeleteRpc,
+  WsProviderReadSessionRateLimitsRpc,
   WsProviderUploadFeedbackRpc,
   WsSubscribeVcsStatusRpc,
   WsVcsPullRpc,

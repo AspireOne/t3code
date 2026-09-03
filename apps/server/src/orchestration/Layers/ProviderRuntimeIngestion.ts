@@ -1681,6 +1681,9 @@ const make = Effect.gen(function* () {
               runtimeMode: thread.session?.runtimeMode ?? "full-access",
               activeTurnId: nextActiveTurnId,
               lastError,
+              ...(thread.session?.startedAt !== undefined
+                ? { startedAt: thread.session.startedAt }
+                : {}),
               updatedAt: now,
             },
             createdAt: now,
@@ -1931,6 +1934,9 @@ const make = Effect.gen(function* () {
               runtimeMode: thread.session?.runtimeMode ?? "full-access",
               activeTurnId: eventTurnId ?? null,
               lastError: runtimeErrorMessage,
+              ...(thread.session?.startedAt !== undefined
+                ? { startedAt: thread.session.startedAt }
+                : {}),
               updatedAt: now,
             },
             createdAt: now,

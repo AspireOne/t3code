@@ -13,6 +13,7 @@ import {
   type ProviderApprovalDecision,
   type ProviderEvent,
   type ProviderSession,
+  type ServerProviderRateLimits,
   type ProviderTurnStartResult,
   type ProviderUserInputAnswers,
   ThreadId,
@@ -59,6 +60,19 @@ const asTurnId = (value: string): TurnId => TurnId.make(value);
 const asEventId = (value: string): EventId => EventId.make(value);
 const asItemId = (value: string): ProviderItemId => ProviderItemId.make(value);
 
+function rateLimits(usedPercent: number): ServerProviderRateLimits {
+  return {
+    fetchedAt: "2026-09-03T10:00:00.000Z",
+    windows: [
+      {
+        windowDurationMins: 300,
+        usedPercent,
+        resetsAt: "2030-03-17T17:46:40.000Z",
+      },
+    ],
+  };
+}
+
 class FakeCodexRuntime implements CodexSessionRuntimeShape {
   private readonly eventQueue = Effect.runSync(Queue.unbounded<ProviderEvent>());
   private readonly now = "2026-01-01T00:00:00.000Z";
@@ -89,6 +103,10 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
     (_turnId?: TurnId): Promise<void> => Promise.resolve(undefined),
   );
   public readonly compactThreadImpl = vi.fn(() => Promise.resolve(undefined));
+  public readonly readRateLimitsImpl = vi.fn(
+    (): Effect.Effect<ServerProviderRateLimits | null, CodexErrors.CodexAppServerError> =>
+      Effect.succeed(null),
+  );
   public readonly deleteThreadImpl = vi.fn(() => Promise.resolve(undefined));
 
   public readonly readThreadImpl = vi.fn(
@@ -145,6 +163,8 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
 
   compactThread = Effect.promise(() => this.compactThreadImpl());
 
+  readRateLimits = Effect.suspend(() => this.readRateLimitsImpl());
+
   deleteThread = Effect.promise(() => this.deleteThreadImpl());
 
   readThread = Effect.promise(() => this.readThreadImpl());
@@ -188,6 +208,9 @@ function makeRuntimeFactory() {
     factory,
     get lastRuntime(): FakeCodexRuntime | undefined {
       return runtimes.at(-1);
+    },
+    runtimeFor(threadId: ThreadId): FakeCodexRuntime | undefined {
+      return runtimes.find((runtime) => runtime.options.threadId === threadId);
     },
   };
 }
@@ -431,6 +454,113 @@ const sessionErrorLayer = it.layer(
 );
 
 sessionErrorLayer("CodexAdapterLive session errors", (it) => {
+  it.effect("reads rate limits from the exact active Codex session", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      NodeAssert.ok(adapter.readSessionRateLimits);
+      const oldThreadId = asThreadId("quota-old-account");
+      const newThreadId = asThreadId("quota-new-account");
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: oldThreadId,
+        runtimeMode: "full-access",
+      });
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: newThreadId,
+        runtimeMode: "full-access",
+      });
+      const oldRuntime = sessionRuntimeFactory.runtimeFor(oldThreadId);
+      const newRuntime = sessionRuntimeFactory.runtimeFor(newThreadId);
+      NodeAssert.ok(oldRuntime);
+      NodeAssert.ok(newRuntime);
+      oldRuntime.readRateLimitsImpl.mockReturnValue(Effect.succeed(rateLimits(81)));
+      newRuntime.readRateLimitsImpl.mockReturnValue(Effect.succeed(rateLimits(24)));
+
+      NodeAssert.equal(
+        (yield* adapter.readSessionRateLimits(oldThreadId))?.windows[0]?.usedPercent,
+        81,
+      );
+      NodeAssert.equal(
+        (yield* adapter.readSessionRateLimits(newThreadId))?.windows[0]?.usedPercent,
+        24,
+      );
+    }),
+  );
+
+  it.effect("returns no rate limits after the owning session stops", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      NodeAssert.ok(adapter.readSessionRateLimits);
+      const threadId = asThreadId("quota-stopped-session");
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const runtime = sessionRuntimeFactory.runtimeFor(threadId);
+      NodeAssert.ok(runtime);
+      runtime.readRateLimitsImpl.mockReturnValue(Effect.succeed(rateLimits(62)));
+      yield* adapter.stopSession(threadId);
+
+      NodeAssert.equal(yield* adapter.readSessionRateLimits(threadId), null);
+      NodeAssert.equal(runtime.readRateLimitsImpl.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("discards an in-flight read when the thread runtime is replaced", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      NodeAssert.ok(adapter.readSessionRateLimits);
+      const threadId = asThreadId("quota-restarted-session");
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const oldRuntime = sessionRuntimeFactory.runtimeFor(threadId);
+      NodeAssert.ok(oldRuntime);
+      const pendingRead = Promise.withResolvers<ServerProviderRateLimits | null>();
+      oldRuntime.readRateLimitsImpl.mockReturnValue(Effect.promise(() => pendingRead.promise));
+      const readFiber = yield* adapter.readSessionRateLimits(threadId).pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      NodeAssert.equal(oldRuntime.readRateLimitsImpl.mock.calls.length, 1);
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      pendingRead.resolve(rateLimits(93));
+
+      NodeAssert.equal(yield* Fiber.join(readFiber), null);
+    }),
+  );
+
+  it.effect("maps a session rate-limit failure without leaking it across sessions", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      NodeAssert.ok(adapter.readSessionRateLimits);
+      const threadId = asThreadId("quota-read-failure");
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const runtime = sessionRuntimeFactory.runtimeFor(threadId);
+      NodeAssert.ok(runtime);
+      runtime.readRateLimitsImpl.mockReturnValue(
+        Effect.fail(CodexErrors.CodexAppServerRequestError.internalError("private auth detail")),
+      );
+
+      const result = yield* adapter.readSessionRateLimits(threadId).pipe(Effect.result);
+
+      NodeAssert.equal(result._tag, "Failure");
+      NodeAssert.equal(result.failure._tag, "ProviderAdapterRequestError");
+      NodeAssert.equal(result.failure.method, "account/rateLimits/read");
+    }),
+  );
+
   it.effect("maps missing adapter sessions to ProviderAdapterSessionNotFoundError", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

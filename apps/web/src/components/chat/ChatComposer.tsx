@@ -155,6 +155,7 @@ import {
 import {
   getComposerPromptInjectionState,
   getComposerProviderState,
+  resolveComposerCodexRateLimits,
   renderProviderTraitsMenuContent,
   renderProviderTraitsPicker,
 } from "./composerProviderState";
@@ -681,6 +682,7 @@ export interface ChatComposerProps {
   providerStatuses: ServerProvider[];
   activeProjectDefaultModelSelection: ModelSelection | null | undefined;
   activeThreadModelSelection: ModelSelection | null | undefined;
+  activeSessionRateLimits: ServerProviderRateLimits | null;
 
   // Context window
   activeContextWindow: ContextWindowSnapshot | null;
@@ -782,6 +784,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     providerStatuses,
     activeProjectDefaultModelSelection,
     activeThreadModelSelection,
+    activeSessionRateLimits,
     activeContextWindow,
     compactDisabled,
     compactDisabledReason,
@@ -1119,8 +1122,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     () => selectedProviderEntry?.snapshot ?? null,
     [selectedProviderEntry],
   );
-  const selectedCodexRateLimits =
-    selectedProvider === "codex" ? (selectedProviderStatus?.rateLimits ?? null) : null;
+  const selectedCodexRateLimits = resolveComposerCodexRateLimits({
+    provider: selectedProvider,
+    session: activeThread?.session ?? null,
+    sessionRateLimits: activeSessionRateLimits,
+    providerRateLimits: selectedProviderStatus?.rateLimits ?? null,
+  });
   const selectedProviderModels = useMemo<ReadonlyArray<ServerProvider["models"][number]>>(
     () => selectedProviderEntry?.models ?? [],
     [selectedProviderEntry],

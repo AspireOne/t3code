@@ -11,6 +11,7 @@ import {
   type ProviderInteractionMode,
   type ProviderRequestKind,
   type ProviderSession,
+  type ServerProviderRateLimits,
   type ProviderTurnStartResult,
   type ProviderUserInputAnswers,
   RuntimeMode,
@@ -41,7 +42,10 @@ import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import { buildCodexDeveloperInstructions } from "../CodexDeveloperInstructions.ts";
 import { type CodexRateLimitCoordinatorShape } from "../CodexRateLimitCoordinator.ts";
-import { codexRateLimitAccountKeyFromAccount } from "../CodexRateLimits.ts";
+import {
+  codexRateLimitAccountKeyFromAccount,
+  normalizeCodexRateLimits,
+} from "../CodexRateLimits.ts";
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
 
 const PROVIDER = ProviderDriverKind.make("codex");
@@ -200,6 +204,10 @@ export interface CodexThreadSnapshot {
 export interface CodexSessionRuntimeShape {
   readonly start: () => Effect.Effect<ProviderSession, CodexSessionRuntimeError>;
   readonly getSession: Effect.Effect<ProviderSession>;
+  readonly readRateLimits: Effect.Effect<
+    ServerProviderRateLimits | null,
+    CodexErrors.CodexAppServerError
+  >;
   readonly sendTurn: (
     input: CodexSessionRuntimeSendTurnInput,
   ) => Effect.Effect<ProviderTurnStartResult, CodexSessionRuntimeError>;
@@ -1359,6 +1367,7 @@ export const makeCodexSessionRuntime = (
     const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
       Effect.provide(clientContext),
     );
+    const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
     const readAccountRateLimits = () =>
       Effect.gen(function* () {
         const account = yield* client.request("account/read", {});
@@ -1367,8 +1376,22 @@ export const makeCodexSessionRuntime = (
         const rateLimits = yield* client.request("account/rateLimits/read", undefined);
         return { accountKey, rateLimits } as const;
       });
+    const readRateLimits = Effect.gen(function* () {
+      const result = yield* readAccountRateLimits();
+      if (result.accountKey === null || result.rateLimits === undefined) return null;
+      return normalizeCodexRateLimits(result.rateLimits, yield* nowIso) ?? null;
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: "10 seconds",
+        orElse: () =>
+          Effect.fail(
+            CodexErrors.CodexAppServerRequestError.internalError(
+              "Timed out reading Codex account rate limits.",
+            ),
+          ),
+      }),
+    );
     const serverNotifications = yield* Queue.unbounded<CodexServerNotification>();
-    const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
     const randomUUIDv4 = (purpose: CodexErrors.CodexAppServerIdentifierPurpose) =>
       crypto.randomUUIDv4.pipe(
         Effect.mapError(
@@ -2467,6 +2490,7 @@ export const makeCodexSessionRuntime = (
     return {
       start,
       getSession: Ref.get(sessionRef),
+      readRateLimits,
       sendTurn: (input) =>
         Effect.gen(function* () {
           const providerThreadId = yield* readProviderThreadId;

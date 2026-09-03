@@ -1020,6 +1020,23 @@ it.effect("decodes orchestration session runtime mode defaults", () =>
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
+    assert.strictEqual(parsed.startedAt, undefined);
+  }),
+);
+
+it.effect("preserves an orchestration session runtime generation timestamp", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationSession({
+      threadId: "thread-1",
+      status: "ready",
+      providerName: "codex",
+      activeTurnId: null,
+      lastError: null,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:01:00.000Z",
+    });
+
+    assert.strictEqual(parsed.startedAt, "2026-01-01T00:00:00.000Z");
   }),
 );
 

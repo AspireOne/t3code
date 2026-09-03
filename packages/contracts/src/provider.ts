@@ -138,6 +138,18 @@ export class ProviderUploadFeedbackError extends Schema.TaggedErrorClass<Provide
   }
 }
 
+export class ProviderSessionRateLimitsError extends Schema.TaggedErrorClass<ProviderSessionRateLimitsError>()(
+  "ProviderSessionRateLimitsError",
+  {
+    threadId: ThreadId,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return `Failed to read provider rate limits for thread ${this.threadId}.`;
+  }
+}
+
 const ProviderEventKind = Schema.Literals(["session", "notification", "request", "error"]);
 
 export const ProviderEvent = Schema.Struct({

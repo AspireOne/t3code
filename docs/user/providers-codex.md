@@ -35,11 +35,14 @@ the remaining five-hour and weekly limits beside the context-window ring. Hover 
 combined usage control to see reset times and separate progress bars. The labels collapse to an
 icon when the composer is narrow.
 
-Limits belong to the selected Codex provider instance, so work and personal accounts report their
-own usage. T3 Code refreshes them while work is running and periodically while idle. If Codex cannot
-return a fresh value, the last successful value remains visible and is marked as potentially stale.
-This fallback lasts only for the current server session; account limits are revalidated after a
-restart. API-key Codex setups do not show account limits.
+For a live thread, T3 Code reads limits from the exact Codex app-server process running that thread.
+If `auth.json` changes after a thread starts, that thread keeps showing the account it is actually
+using; a newly started thread can show the new account instead. T3 Code never substitutes another
+account's limits when a live session cannot return them.
+
+Before a thread starts, or after its session stops, the composer uses the selected provider
+instance's current limits. T3 Code refreshes live-session limits periodically. API-key Codex setups
+do not show account limits.
 
 ## Send feedback to OpenAI
 
