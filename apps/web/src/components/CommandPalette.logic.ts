@@ -167,6 +167,33 @@ export interface CommandPaletteGroup {
   readonly items: ReadonlyArray<CommandPaletteActionItem | CommandPaletteSubmenuItem>;
 }
 
+export function resolveCommandPaletteHighlightedItemValue(input: {
+  groups: ReadonlyArray<CommandPaletteGroup>;
+  highlightedItemValue: string | null;
+  autoHighlight: boolean;
+}): string | null {
+  for (const group of input.groups) {
+    for (const item of group.items) {
+      if (!item.disabled && item.value === input.highlightedItemValue) {
+        return item.value;
+      }
+    }
+  }
+
+  if (!input.autoHighlight) {
+    return null;
+  }
+
+  for (const group of input.groups) {
+    const firstEnabledItem = group.items.find((item) => !item.disabled);
+    if (firstEnabledItem) {
+      return firstEnabledItem.value;
+    }
+  }
+
+  return null;
+}
+
 export interface CommandPaletteView {
   readonly addonIcon: ReactNode;
   readonly groups: ReadonlyArray<CommandPaletteGroup>;

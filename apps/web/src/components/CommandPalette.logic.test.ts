@@ -12,6 +12,7 @@ import {
   filterCommandPaletteGroups,
   normalizeSearchText,
   reduceCommandPaletteUiState,
+  resolveCommandPaletteHighlightedItemValue,
   shouldShowDesktopDeleteThreadAction,
   type CommandPaletteGroup,
 } from "./CommandPalette.logic";
@@ -113,6 +114,82 @@ describe("reduceCommandPaletteUiState", () => {
       mode: "command",
       openIntent: null,
     });
+  });
+});
+
+describe("resolveCommandPaletteHighlightedItemValue", () => {
+  const action = (value: string, disabled = false) => ({
+    kind: "action" as const,
+    value,
+    searchTerms: [],
+    title: value,
+    icon: null,
+    disabled,
+    run: async () => undefined,
+  });
+
+  it("preselects the first enabled result across groups", () => {
+    const groups: CommandPaletteGroup[] = [
+      { value: "actions", label: "Actions", items: [action("disabled", true)] },
+      { value: "threads", label: "Threads", items: [action("first"), action("second")] },
+    ];
+
+    expect(
+      resolveCommandPaletteHighlightedItemValue({
+        groups,
+        highlightedItemValue: null,
+        autoHighlight: true,
+      }),
+    ).toBe("first");
+  });
+
+  it("preserves an explicitly highlighted visible result", () => {
+    const groups: CommandPaletteGroup[] = [
+      { value: "actions", label: "Actions", items: [action("first"), action("second")] },
+    ];
+
+    expect(
+      resolveCommandPaletteHighlightedItemValue({
+        groups,
+        highlightedItemValue: "second",
+        autoHighlight: true,
+      }),
+    ).toBe("second");
+  });
+
+  it("falls back when the previous result is no longer visible", () => {
+    const groups: CommandPaletteGroup[] = [
+      { value: "actions", label: "Actions", items: [action("first"), action("third")] },
+    ];
+
+    expect(
+      resolveCommandPaletteHighlightedItemValue({
+        groups,
+        highlightedItemValue: "second",
+        autoHighlight: true,
+      }),
+    ).toBe("first");
+  });
+
+  it("does not create a highlight when automatic highlighting is disabled or no results exist", () => {
+    const groups: CommandPaletteGroup[] = [
+      { value: "actions", label: "Actions", items: [action("first")] },
+    ];
+
+    expect(
+      resolveCommandPaletteHighlightedItemValue({
+        groups,
+        highlightedItemValue: null,
+        autoHighlight: false,
+      }),
+    ).toBeNull();
+    expect(
+      resolveCommandPaletteHighlightedItemValue({
+        groups: [],
+        highlightedItemValue: null,
+        autoHighlight: true,
+      }),
+    ).toBeNull();
   });
 });
 

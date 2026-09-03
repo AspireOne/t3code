@@ -153,6 +153,7 @@ import {
   ITEM_ICON_CLASS,
   RECENT_THREAD_LIMIT,
   reduceCommandPaletteUiState,
+  resolveCommandPaletteHighlightedItemValue,
   shouldShowDesktopDeleteThreadAction,
   type SearchOverlayMode,
 } from "./CommandPalette.logic";
@@ -2322,6 +2323,17 @@ function OpenCommandPaletteDialog(props: {
     displayedGroups = relativePathNeedsActiveProject ? [] : browseGroups;
   }
 
+  const resolvedHighlightedItemValue = resolveCommandPaletteHighlightedItemValue({
+    groups: displayedGroups,
+    highlightedItemValue,
+    autoHighlight:
+      isElectron &&
+      query === deferredQuery &&
+      deferredQuery.trim().length > 0 &&
+      !isBrowsing &&
+      !isRemoteProjectCloneFlow,
+  });
+
   const inputPlaceholder =
     remoteProjectInputPlaceholder(addProjectCloneFlow) ??
     getCommandPaletteInputPlaceholder(paletteMode);
@@ -2750,7 +2762,7 @@ function OpenCommandPaletteDialog(props: {
       ) : null}
       <CommandPaletteResults
         groups={displayedGroups}
-        highlightedItemValue={highlightedItemValue}
+        highlightedItemValue={resolvedHighlightedItemValue}
         isActionsOnly={isActionsOnly}
         keybindings={keybindings}
         onExecuteItem={executeItem}
