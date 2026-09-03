@@ -116,6 +116,7 @@ import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useDesktopUpdateState } from "../state/desktopUpdate";
 
 import { useThreadActions } from "../hooks/useThreadActions";
+import { onThreadRenameRequest } from "../threadRenameBus";
 import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
 import { threadEnvironment, useEnvironmentThread } from "../state/threads";
@@ -1152,7 +1153,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     (settings) => settings.sidebarThreadPreviewCount,
   );
   const router = useRouter();
-  const { isMobile, setOpenMobile } = useSidebar();
+  const { isMobile, setOpen, setOpenMobile } = useSidebar();
   const markThreadUnread = useUiStateStore((state) => state.markThreadUnread);
   const setProjectExpanded = useUiStateStore((state) => state.setProjectExpanded);
   const toggleThreadSelection = useThreadSelectionStore((state) => state.toggleThread);
@@ -2026,6 +2027,33 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     setRenamingTitle(title);
     renamingCommittedRef.current = false;
   }, []);
+  useEffect(() => {
+    return onThreadRenameRequest((threadRef) => {
+      const threadKey = scopedThreadKey(threadRef);
+      const thread = sidebarThreadByKeyRef.current.get(threadKey);
+      if (!thread || thread.archivedAt !== null) return false;
+      if (projectExpanded && hasOverflowingThreads && !isThreadListExpanded) {
+        expandThreadListForProject(project.projectKey);
+      }
+      if (isMobile) {
+        setOpenMobile(true);
+      } else {
+        setOpen(true);
+      }
+      startThreadRename(threadKey, thread.title);
+      return true;
+    });
+  }, [
+    expandThreadListForProject,
+    hasOverflowingThreads,
+    isMobile,
+    isThreadListExpanded,
+    project.projectKey,
+    projectExpanded,
+    setOpen,
+    setOpenMobile,
+    startThreadRename,
+  ]);
 
   const commitRename = useCallback(
     async (threadRef: ScopedThreadRef, newTitle: string, originalTitle: string) => {

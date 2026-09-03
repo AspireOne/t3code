@@ -48,6 +48,7 @@ import {
   LinkIcon,
   MessageSquareIcon,
   PaletteIcon,
+  PencilIcon,
   RotateCcwIcon,
   ServerIcon,
   SettingsIcon,
@@ -101,6 +102,7 @@ import {
   resolveProjectPathForDispatch,
 } from "../lib/projectPaths";
 import { onOpenCommandPalette } from "../commandPaletteBus";
+import { requestThreadRename } from "../threadRenameBus";
 import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
@@ -126,6 +128,7 @@ import {
   browseInputEndPaddingClass,
   buildBrowseGroups,
   buildProjectActionItems,
+  buildRenameThreadActionItem,
   buildRootGroups,
   buildThreadActionItems,
   enumerateCommandPaletteItems,
@@ -419,6 +422,15 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { theme, themeHalves, resolvedTheme } = useTheme();
   const composerHandleRef = useRef<ChatComposerHandle | null>(null);
+  const preserveFocusOnCloseRef = useRef(false);
+  const preserveFocusOnClose = useCallback(() => {
+    preserveFocusOnCloseRef.current = true;
+  }, []);
+  const shouldPreserveFocusOnClose = useCallback(() => {
+    if (!preserveFocusOnCloseRef.current) return false;
+    preserveFocusOnCloseRef.current = false;
+    return true;
+  }, []);
   const routeTarget = useParams({
     strict: false,
     select: (params) => resolveThreadRouteTarget(params),
@@ -516,6 +528,8 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           setOpen={setOpen}
           openOverlayMode={toggleMode}
           clearOpenIntent={clearOpenIntent}
+          preserveFocusOnClose={preserveFocusOnClose}
+          shouldPreserveFocusOnClose={shouldPreserveFocusOnClose}
         />
       </CommandDialog>
     </ComposerHandleContext>
@@ -528,6 +542,8 @@ function CommandPaletteDialog(props: {
   readonly setOpen: (open: boolean) => void;
   readonly openOverlayMode: (mode: SearchOverlayMode) => void;
   readonly clearOpenIntent: () => void;
+  readonly preserveFocusOnClose: () => void;
+  readonly shouldPreserveFocusOnClose: () => boolean;
 }) {
   const composerHandleRef = useComposerHandleContext();
 
@@ -545,6 +561,9 @@ function CommandPaletteDialog(props: {
       data-palette-mode={props.mode}
       data-testid="command-palette"
       finalFocus={() => {
+        if (props.shouldPreserveFocusOnClose()) {
+          return false;
+        }
         composerHandleRef?.current?.focusAtEnd();
         return false;
       }}
@@ -562,6 +581,7 @@ function CommandPaletteDialog(props: {
           setOpen={props.setOpen}
           openOverlayMode={props.openOverlayMode}
           clearOpenIntent={props.clearOpenIntent}
+          preserveFocusOnClose={props.preserveFocusOnClose}
         />
       )}
     </CommandDialogPopup>
@@ -573,6 +593,7 @@ function OpenCommandPaletteDialog(props: {
   readonly setOpen: (open: boolean) => void;
   readonly openOverlayMode: (mode: SearchOverlayMode) => void;
   readonly clearOpenIntent: () => void;
+  readonly preserveFocusOnClose: () => void;
 }) {
   const navigate = useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
@@ -1612,6 +1633,16 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
+  if (activeThread && activeThread.archivedAt === null) {
+    actionItems.push(
+      buildRenameThreadActionItem({
+        thread: activeThread,
+        icon: <PencilIcon className={ITEM_ICON_CLASS} />,
+        requestRename: requestThreadRename,
+      }),
+    );
+  }
+
   if (activeThread && activeThreadForkSupported) {
     const activeThreadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
     actionItems.push({
@@ -2384,6 +2415,9 @@ function OpenCommandPaletteDialog(props: {
       return;
     }
 
+    if (!item.keepOpen && item.preserveFocusOnClose) {
+      props.preserveFocusOnClose();
+    }
     if (!item.keepOpen) {
       setOpen(false);
     }

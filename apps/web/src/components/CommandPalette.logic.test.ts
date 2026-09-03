@@ -4,6 +4,7 @@ import type { Thread } from "../types";
 import {
   browseInputEndPaddingClass,
   buildBrowseGroups,
+  buildRenameThreadActionItem,
   buildThreadActionItems,
   enumerateCommandPaletteItems,
   filterPinnedBrowseEntries,
@@ -137,6 +138,42 @@ describe("enumerateCommandPaletteItems", () => {
       "thread.jump.9",
       undefined,
     ]);
+  });
+});
+
+describe("buildRenameThreadActionItem", () => {
+  it("creates a searchable action that requests the current thread and preserves destination focus", async () => {
+    const thread = makeThread();
+    const requestRename = vi.fn();
+    const item = buildRenameThreadActionItem({
+      thread,
+      icon: null,
+      requestRename,
+    });
+
+    expect(item).toMatchObject({
+      value: "action:rename-thread",
+      title: "Rename thread",
+      searchTerms: ["rename thread", "rename", "edit title", "title"],
+      preserveFocusOnClose: true,
+    });
+
+    expect(
+      filterCommandPaletteGroups({
+        activeGroups: [{ value: "actions", label: "Actions", items: [item] }],
+        query: "rename thread",
+        isInSubmenu: false,
+        projectSearchItems: [],
+        threadSearchItems: [],
+      }),
+    ).toMatchObject([{ value: "actions", items: [item] }]);
+
+    await item.run();
+
+    expect(requestRename).toHaveBeenCalledWith({
+      environmentId: thread.environmentId,
+      threadId: thread.id,
+    });
   });
 });
 

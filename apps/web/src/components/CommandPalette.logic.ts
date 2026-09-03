@@ -3,6 +3,8 @@ import {
   type KeybindingCommand,
   THREAD_JUMP_KEYBINDING_COMMANDS,
 } from "@t3tools/contracts";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import type { ScopedThreadRef } from "@t3tools/contracts";
 import { filterFilesystemBrowseEntries } from "@t3tools/client-runtime/state/filesystem";
 import type { SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import * as Arr from "effect/Array";
@@ -105,7 +107,27 @@ export interface CommandPaletteItem {
 export interface CommandPaletteActionItem extends CommandPaletteItem {
   readonly kind: "action";
   readonly keepOpen?: boolean;
+  /** Keep focus on the destination when this action closes the palette. */
+  readonly preserveFocusOnClose?: boolean;
   readonly run: () => Promise<void>;
+}
+
+export function buildRenameThreadActionItem(input: {
+  thread: Pick<SidebarThreadSummary, "environmentId" | "id">;
+  icon: ReactNode;
+  requestRename: (threadRef: ScopedThreadRef) => void;
+}): CommandPaletteActionItem {
+  return {
+    kind: "action",
+    value: "action:rename-thread",
+    searchTerms: ["rename thread", "rename", "edit title", "title"],
+    title: "Rename thread",
+    icon: input.icon,
+    preserveFocusOnClose: true,
+    run: async () => {
+      input.requestRename(scopeThreadRef(input.thread.environmentId, input.thread.id));
+    },
+  };
 }
 
 export interface CommandPaletteSubmenuItem extends CommandPaletteItem {

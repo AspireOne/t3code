@@ -46,3 +46,6 @@ pill** fallback because their colors are not controlled by T3 Code.
 To generate a fresh title from the conversation, open a thread's context menu and choose
 **Regenerate title**. While T3 Code is generating it, the action reads **Regenerating…** and cannot
 be selected again. The option is hidden when the connected environment needs a server update.
+
+To rename the active thread, open the Command Palette and choose **Rename thread**. This opens the
+same inline editor as the thread context menu.

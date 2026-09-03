@@ -14,6 +14,7 @@ import { getLocalStorageItem, removeLocalStorageItem } from "../hooks/useLocalSt
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import { cn, isMacPlatform } from "../lib/utils";
 import { primaryServerKeybindingsAtom } from "../state/server";
+import { onThreadRenameRequest } from "../threadRenameBus";
 import { useEnvironmentIdentificationMode, useLegacySidebarEnabled } from "../hooks/useSettings";
 import LegacyThreadSidebar from "./LegacySidebar";
 import ThreadSidebar from "./Sidebar";
@@ -136,6 +137,27 @@ function ProjectProjectionRetention() {
   return null;
 }
 
+function SidebarRenameRequestBridge() {
+  const { isMobile, open, openMobile, setOpen, setOpenMobile } = useSidebar();
+
+  useEffect(() => {
+    return onThreadRenameRequest(() => {
+      if (isMobile) {
+        if (!openMobile) {
+          setOpenMobile(true);
+        }
+        return false;
+      }
+      if (!open) {
+        setOpen(true);
+      }
+      return false;
+    });
+  }, [isMobile, open, openMobile, setOpen, setOpenMobile]);
+
+  return null;
+}
+
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const legacySidebarEnabled = useLegacySidebarEnabled();
@@ -210,6 +232,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
 
   return (
     <SidebarProvider className="h-dvh! min-h-0!" defaultOpen style={sidebarProviderStyle}>
+      <SidebarRenameRequestBridge />
       <ProjectProjectionRetention />
       <Sidebar
         side="left"

@@ -100,6 +100,7 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { openCommandPalette } from "../commandPaletteBus";
+import { onThreadRenameRequest } from "../threadRenameBus";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
@@ -1732,7 +1733,7 @@ export default function Sidebar() {
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
   const router = useRouter();
-  const { isMobile, setOpenMobile } = useSidebar();
+  const { isMobile, setOpen, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
@@ -2299,6 +2300,11 @@ export default function Sidebar() {
   // event and defeat row memoization during streaming.
   const threadByKeyRef = useRef(threadByKey);
   threadByKeyRef.current = threadByKey;
+  // The rendered map follows project and shelf filters. Global actions can
+  // target the active thread outside those filters, so resolve that request
+  // against the complete shell list without rebuilding another map per event.
+  const threadsRef = useRef(threads);
+  threadsRef.current = threads;
   // handleNewThread is inherently unstable (depends on the projects list);
   // a ref keeps it out of attemptSettle's dependency array.
   const handleNewThreadRef = useRef(newThreadContext.handleNewThread);
@@ -2429,6 +2435,24 @@ export default function Sidebar() {
     setRenamingThreadKey(scopedThreadKey(threadRef));
     setRenamingTitle(title);
   }, []);
+  useEffect(() => {
+    return onThreadRenameRequest((threadRef) => {
+      const thread = threadsRef.current.find(
+        (candidate) =>
+          candidate.environmentId === threadRef.environmentId &&
+          candidate.id === threadRef.threadId,
+      );
+      if (!thread || thread.archivedAt !== null) return false;
+      setProjectScopeKey(null);
+      if (isMobile) {
+        setOpenMobile(true);
+      } else {
+        setOpen(true);
+      }
+      startThreadRename(threadRef, thread.title);
+      return true;
+    });
+  }, [isMobile, setOpen, setOpenMobile, startThreadRename]);
   const cancelThreadRename = useCallback(() => setRenamingThreadKey(null), []);
   const commitThreadRename = useCallback(
     (threadRef: ScopedThreadRef, title: string, originalTitle: string) => {
