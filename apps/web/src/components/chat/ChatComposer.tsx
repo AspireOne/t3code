@@ -155,7 +155,7 @@ import {
 import {
   getComposerPromptInjectionState,
   getComposerProviderState,
-  resolveComposerCodexRateLimits,
+  resolveComposerCodexUsage,
   renderProviderTraitsMenuContent,
   renderProviderTraitsPicker,
 } from "./composerProviderState";
@@ -505,6 +505,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   usageCompact: boolean;
   activeContextWindow: ContextWindowSnapshot | null;
   providerRateLimits: ServerProviderRateLimits | null;
+  accountEmail: string | null;
   activeThreadModelDisplayName: string | null;
   isPreparingWorktree: boolean;
   pendingAction: {
@@ -533,10 +534,11 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
 }) {
   return (
     <>
-      {props.activeContextWindow || props.providerRateLimits ? (
+      {props.activeContextWindow || props.providerRateLimits || props.accountEmail ? (
         <ContextWindowMeter
           usage={props.activeContextWindow}
           rateLimits={props.providerRateLimits ?? undefined}
+          accountEmail={props.accountEmail}
           compact={props.usageCompact}
           modelDisplayName={props.activeThreadModelDisplayName}
           onCompact={props.onCompactContext}
@@ -683,6 +685,7 @@ export interface ChatComposerProps {
   activeProjectDefaultModelSelection: ModelSelection | null | undefined;
   activeThreadModelSelection: ModelSelection | null | undefined;
   activeSessionRateLimits: ServerProviderRateLimits | null;
+  activeSessionRateLimitsError: string | null;
 
   // Context window
   activeContextWindow: ContextWindowSnapshot | null;
@@ -785,6 +788,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeProjectDefaultModelSelection,
     activeThreadModelSelection,
     activeSessionRateLimits,
+    activeSessionRateLimitsError,
     activeContextWindow,
     compactDisabled,
     compactDisabledReason,
@@ -1122,12 +1126,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     () => selectedProviderEntry?.snapshot ?? null,
     [selectedProviderEntry],
   );
-  const selectedCodexRateLimits = resolveComposerCodexRateLimits({
+  const selectedCodexUsage = resolveComposerCodexUsage({
     provider: selectedProvider,
     session: activeThread?.session ?? null,
     sessionRateLimits: activeSessionRateLimits,
+    sessionRateLimitsError: activeSessionRateLimitsError,
     providerRateLimits: selectedProviderStatus?.rateLimits ?? null,
+    providerEmail: selectedProviderStatus?.auth.email,
   });
+  const selectedCodexRateLimits = selectedCodexUsage.rateLimits;
   const selectedProviderModels = useMemo<ReadonlyArray<ServerProvider["models"][number]>>(
     () => selectedProviderEntry?.models ?? [],
     [selectedProviderEntry],
@@ -4293,6 +4300,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     usageCompact={isComposerFooterCompact}
                     activeContextWindow={activeContextWindow}
                     providerRateLimits={selectedCodexRateLimits}
+                    accountEmail={selectedCodexUsage.accountEmail}
                     activeThreadModelDisplayName={activeThreadModelDisplayName}
                     pendingAction={pendingPrimaryAction}
                     isRunning={phase === "running"}

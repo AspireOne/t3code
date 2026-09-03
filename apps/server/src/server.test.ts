@@ -4732,6 +4732,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const threadId = ThreadId.make("thread-session-rate-limits");
       const rateLimits = {
         fetchedAt: "2026-09-03T10:00:00.000Z",
+        email: "active@example.com",
         windows: [
           {
             windowDurationMins: 300,

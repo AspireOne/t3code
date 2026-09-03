@@ -2419,6 +2419,7 @@ function ChatViewContent(props: ChatViewProps) {
   ]);
   const activeSessionRateLimits: ServerProviderRateLimits | null =
     activeSessionRateLimitsQuery.data;
+  const activeSessionRateLimitsError = activeSessionRateLimitsQuery.error;
   const workLogEntries = useMemo(() => deriveWorkLogEntries(threadActivities), [threadActivities]);
   useEffect(() => {
     if (!compactionSubmission || compactionSubmission.status !== "compacting") return;
@@ -7637,6 +7638,7 @@ function ChatViewContent(props: ChatViewProps) {
                             }
                             activeThreadModelSelection={activeThread?.modelSelection}
                             activeSessionRateLimits={activeSessionRateLimits}
+                            activeSessionRateLimitsError={activeSessionRateLimitsError}
                             activeContextWindow={activeContextWindow}
                             compactDisabled={compactDisabled}
                             compactDisabledReason={compactDisabledReason}

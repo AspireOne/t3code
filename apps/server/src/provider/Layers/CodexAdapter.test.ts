@@ -60,7 +60,7 @@ const asTurnId = (value: string): TurnId => TurnId.make(value);
 const asEventId = (value: string): EventId => EventId.make(value);
 const asItemId = (value: string): ProviderItemId => ProviderItemId.make(value);
 
-function rateLimits(usedPercent: number): ServerProviderRateLimits {
+function rateLimits(usedPercent: number, email?: string): ServerProviderRateLimits {
   return {
     fetchedAt: "2026-09-03T10:00:00.000Z",
     windows: [
@@ -70,6 +70,7 @@ function rateLimits(usedPercent: number): ServerProviderRateLimits {
         resetsAt: "2030-03-17T17:46:40.000Z",
       },
     ],
+    ...(email ? { email } : {}),
   };
 }
 
@@ -474,17 +475,13 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
       const newRuntime = sessionRuntimeFactory.runtimeFor(newThreadId);
       NodeAssert.ok(oldRuntime);
       NodeAssert.ok(newRuntime);
-      oldRuntime.readRateLimitsImpl.mockReturnValue(Effect.succeed(rateLimits(81)));
-      newRuntime.readRateLimitsImpl.mockReturnValue(Effect.succeed(rateLimits(24)));
+      const oldRateLimits = rateLimits(81, "old@example.com");
+      const newRateLimits = rateLimits(24, "new@example.com");
+      oldRuntime.readRateLimitsImpl.mockReturnValue(Effect.succeed(oldRateLimits));
+      newRuntime.readRateLimitsImpl.mockReturnValue(Effect.succeed(newRateLimits));
 
-      NodeAssert.equal(
-        (yield* adapter.readSessionRateLimits(oldThreadId))?.windows[0]?.usedPercent,
-        81,
-      );
-      NodeAssert.equal(
-        (yield* adapter.readSessionRateLimits(newThreadId))?.windows[0]?.usedPercent,
-        24,
-      );
+      NodeAssert.deepStrictEqual(yield* adapter.readSessionRateLimits(oldThreadId), oldRateLimits);
+      NodeAssert.deepStrictEqual(yield* adapter.readSessionRateLimits(newThreadId), newRateLimits);
     }),
   );
 
@@ -531,7 +528,7 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
         threadId,
         runtimeMode: "full-access",
       });
-      pendingRead.resolve(rateLimits(93));
+      pendingRead.resolve(rateLimits(93, "old@example.com"));
 
       NodeAssert.equal(yield* Fiber.join(readFiber), null);
     }),

@@ -71,6 +71,8 @@ export type ServerProviderRateLimitWindow = typeof ServerProviderRateLimitWindow
 export const ServerProviderRateLimits = Schema.Struct({
   fetchedAt: IsoDateTime,
   windows: Schema.Array(ServerProviderRateLimitWindow),
+  /** Email of the account that produced this snapshot, when available. */
+  email: Schema.optional(TrimmedNonEmptyString),
 });
 export type ServerProviderRateLimits = typeof ServerProviderRateLimits.Type;
 

@@ -22,6 +22,7 @@ function formatPercentage(value: number | null): string | null {
 export function ContextWindowMeter(props: {
   usage: ContextWindowSnapshot | null;
   rateLimits?: ServerProviderRateLimits | undefined;
+  accountEmail?: string | null | undefined;
   compact?: boolean | undefined;
   modelDisplayName?: string | null;
   onCompact?: (() => void) | undefined;
@@ -31,6 +32,7 @@ export function ContextWindowMeter(props: {
   const {
     usage,
     rateLimits,
+    accountEmail,
     compact,
     modelDisplayName,
     onCompact,
@@ -52,6 +54,7 @@ export function ContextWindowMeter(props: {
   const hasRateLimits = limitWindows.length > 0;
   const isStale = useRateLimitSnapshotStaleness(rateLimits?.fetchedAt);
   const ariaParts = [
+    accountEmail ? `account ${accountEmail}` : null,
     usage
       ? usage.maxTokens !== null && usedPercentage
         ? `context window ${usedPercentage} used`
@@ -139,6 +142,14 @@ export function ContextWindowMeter(props: {
       >
         <div className="flex flex-col gap-2.5 p-[var(--floating-content-inset)]">
           <div className="font-medium text-muted-foreground text-xs">Usage</div>
+          {accountEmail ? (
+            <div className="flex min-w-0 items-start justify-between gap-3 text-[11px]">
+              <span className="shrink-0 text-secondary-label">Account</span>
+              <span className="min-w-0 break-all text-right font-medium text-secondary-label">
+                {accountEmail}
+              </span>
+            </div>
+          ) : null}
           {usage ? (
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between gap-3">

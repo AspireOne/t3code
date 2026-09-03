@@ -33,7 +33,8 @@ codex login
 When the selected Codex provider uses a ChatGPT account, the web and desktop message composer shows
 the remaining five-hour and weekly limits beside the context-window ring. Hover or select this
 combined usage control to see reset times and separate progress bars. The labels collapse to an
-icon when the composer is narrow.
+icon when the composer is narrow. The Usage popup also identifies the email for the account that
+provided the displayed limits when Codex reports one.
 
 For a live thread, T3 Code reads limits from the exact Codex app-server process running that thread.
 If `auth.json` changes after a thread starts, that thread keeps showing the account it is actually

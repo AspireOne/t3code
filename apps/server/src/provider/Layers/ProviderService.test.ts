@@ -1090,17 +1090,13 @@ routing.layer("ProviderServiceLive routing", (it) => {
         threadId: workThreadId,
         runtimeMode: "full-access",
       });
-      routing.codex.setRateLimits(personalThreadId, providerRateLimits(79));
-      routing.codexWork.setRateLimits(workThreadId, providerRateLimits(18));
+      const personalRateLimits = providerRateLimits(79, "personal@example.com");
+      const workRateLimits = providerRateLimits(18, "work@example.com");
+      routing.codex.setRateLimits(personalThreadId, personalRateLimits);
+      routing.codexWork.setRateLimits(workThreadId, workRateLimits);
 
-      assert.equal(
-        (yield* provider.readSessionRateLimits(personalThreadId))?.windows[0]?.usedPercent,
-        79,
-      );
-      assert.equal(
-        (yield* provider.readSessionRateLimits(workThreadId))?.windows[0]?.usedPercent,
-        18,
-      );
+      assert.deepEqual(yield* provider.readSessionRateLimits(personalThreadId), personalRateLimits);
+      assert.deepEqual(yield* provider.readSessionRateLimits(workThreadId), workRateLimits);
       assert.deepStrictEqual(routing.codex.readSessionRateLimits.mock.calls, [[personalThreadId]]);
       assert.deepStrictEqual(routing.codexWork.readSessionRateLimits.mock.calls, [[workThreadId]]);
       yield* provider.stopSession({ threadId: personalThreadId });
@@ -2195,7 +2191,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
   );
 });
 
-function providerRateLimits(usedPercent: number): ServerProviderRateLimits {
+function providerRateLimits(usedPercent: number, email?: string): ServerProviderRateLimits {
   return {
     fetchedAt: "2026-09-03T10:00:00.000Z",
     windows: [
@@ -2205,6 +2201,7 @@ function providerRateLimits(usedPercent: number): ServerProviderRateLimits {
         resetsAt: "2030-03-17T17:46:40.000Z",
       },
     ],
+    ...(email ? { email } : {}),
   };
 }
 

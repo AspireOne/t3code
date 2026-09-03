@@ -101,6 +101,22 @@ describe("ContextWindowMeter", () => {
     expect(markup).not.toContain("Last update may be stale");
   });
 
+  it("shows the account email in the usage popover", () => {
+    const markup = renderToStaticMarkup(
+      <ContextWindowMeter usage={usage} accountEmail="active@example.com" />,
+    );
+
+    expect(markup).toContain(">Account<");
+    expect(markup).toContain(">active@example.com<");
+    expect(markup).toContain("Usage: account active@example.com, context window 10% used");
+  });
+
+  it("omits the account row when no email is available", () => {
+    const markup = renderToStaticMarkup(<ContextWindowMeter usage={usage} accountEmail={null} />);
+
+    expect(markup).not.toContain(">Account<");
+  });
+
   it("keeps limits available from an icon when no context snapshot exists", () => {
     const markup = renderToStaticMarkup(
       <ContextWindowMeter usage={null} rateLimits={rateLimits} compact />,

@@ -34,7 +34,7 @@ import {
 } from "../providerSnapshot.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import packageJson from "../../../package.json" with { type: "json" };
-import { normalizeCodexRateLimits } from "../CodexRateLimits.ts";
+import { codexAccountEmailFromAccount, normalizeCodexRateLimits } from "../CodexRateLimits.ts";
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
 
 const CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER = "2 seconds" as const;
@@ -107,11 +107,6 @@ function codexAccountAuthLabel(account: CodexSchema.V2GetAccountResponse["accoun
       account.planType satisfies never;
       return undefined;
   }
-}
-
-function codexAccountEmail(account: CodexSchema.V2GetAccountResponse["account"]) {
-  if (!account || account.type !== "chatgpt") return undefined;
-  return account.email;
 }
 
 export function mapCodexModelCapabilities(
@@ -491,7 +486,7 @@ function accountProbeStatus(account: CodexAppServerProviderSnapshot["account"]):
   readonly message?: string;
 } {
   const authLabel = codexAccountAuthLabel(account.account);
-  const authEmail = codexAccountEmail(account.account);
+  const authEmail = codexAccountEmailFromAccount(account.account);
   const auth = {
     status: account.account ? ("authenticated" as const) : ("unknown" as const),
     ...(account.account?.type ? { type: account.account?.type } : {}),

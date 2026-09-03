@@ -25,6 +25,7 @@ import {
   isRecoverableThreadResumeError,
   makeMemoryConsolidationNotificationFilter,
   openCodexThread,
+  readCodexAccountRateLimits,
   revertOrRollbackCodexThread,
   toMcpElicitationResponse,
 } from "./CodexSessionRuntime.ts";
@@ -33,6 +34,131 @@ import type {
   CodexRateLimitSnapshot,
 } from "../CodexRateLimitCoordinator.ts";
 const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
+
+describe("Codex account and rate-limit reads", () => {
+  const account = (
+    email: string,
+  ): NonNullable<EffectCodexSchema.V2GetAccountResponse["account"]> => ({
+    type: "chatgpt",
+    email,
+    planType: "plus",
+  });
+  const rateLimits = (usedPercent: number): EffectCodexSchema.V2GetAccountRateLimitsResponse => ({
+    rateLimits: {
+      primary: {
+        usedPercent,
+        windowDurationMins: 300,
+        resetsAt: 1_900_000_000,
+      },
+    },
+  });
+
+  it.effect("confirms the account after reading its rate limits", () =>
+    Effect.gen(function* () {
+      const accountA = account("a@example.com");
+      const calls: string[] = [];
+      const result = yield* readCodexAccountRateLimits({
+        readAccount: () =>
+          Effect.sync(() => {
+            calls.push("account/read");
+            return { account: accountA, requiresOpenaiAuth: false };
+          }),
+        readRateLimits: () =>
+          Effect.sync(() => {
+            calls.push("account/rateLimits/read");
+            return rateLimits(41);
+          }),
+      });
+
+      NodeAssert.deepStrictEqual(calls, [
+        "account/read",
+        "account/rateLimits/read",
+        "account/read",
+      ]);
+      NodeAssert.deepStrictEqual(result, {
+        account: accountA,
+        accountKey: "chatgpt:a@example.com",
+        rateLimits: rateLimits(41),
+      });
+    }),
+  );
+
+  it.effect("retries after an account transition before accepting limits", () =>
+    Effect.gen(function* () {
+      const accountA = account("a@example.com");
+      const accountB = account("b@example.com");
+      const accounts = [accountA, accountB, accountB, accountB];
+      const responses = [rateLimits(41), rateLimits(24)];
+      const calls: string[] = [];
+      const result = yield* readCodexAccountRateLimits({
+        readAccount: () =>
+          Effect.sync(() => {
+            calls.push("account/read");
+            return {
+              account: accounts.shift() ?? accountB,
+              requiresOpenaiAuth: false,
+            };
+          }),
+        readRateLimits: () =>
+          Effect.sync(() => {
+            calls.push("account/rateLimits/read");
+            return responses.shift() ?? rateLimits(0);
+          }),
+      });
+
+      NodeAssert.deepStrictEqual(calls, [
+        "account/read",
+        "account/rateLimits/read",
+        "account/read",
+        "account/read",
+        "account/rateLimits/read",
+        "account/read",
+      ]);
+      NodeAssert.deepStrictEqual(result, {
+        account: accountB,
+        accountKey: "chatgpt:b@example.com",
+        rateLimits: rateLimits(24),
+      });
+    }),
+  );
+
+  it.effect("discards limits when the account remains unstable after retry", () =>
+    Effect.gen(function* () {
+      const accounts = [
+        account("a@example.com"),
+        account("b@example.com"),
+        account("c@example.com"),
+        account("d@example.com"),
+      ];
+      const calls: string[] = [];
+      const result = yield* readCodexAccountRateLimits({
+        readAccount: () =>
+          Effect.sync(() => {
+            calls.push("account/read");
+            return { account: accounts.shift() ?? null, requiresOpenaiAuth: false };
+          }),
+        readRateLimits: () =>
+          Effect.sync(() => {
+            calls.push("account/rateLimits/read");
+            return rateLimits(41);
+          }),
+      });
+
+      NodeAssert.deepStrictEqual(calls, [
+        "account/read",
+        "account/rateLimits/read",
+        "account/read",
+        "account/read",
+        "account/rateLimits/read",
+        "account/read",
+      ]);
+      NodeAssert.deepStrictEqual(result, {
+        account: account("d@example.com"),
+        accountKey: "chatgpt:d@example.com",
+      });
+    }),
+  );
+});
 
 describe("CodexSessionRuntimeIdentifierGenerationError", () => {
   it("retains identifier purpose and the random source failure", () => {

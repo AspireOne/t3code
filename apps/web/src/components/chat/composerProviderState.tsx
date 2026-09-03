@@ -31,25 +31,71 @@ export type ComposerProviderStateInput = {
 
 export type ComposerPromptInjectionState = "none" | "ultrathink";
 
+export type ComposerCodexUsage = {
+  rateLimits: ServerProviderRateLimits | null;
+  accountEmail: string | null;
+};
+
+function normalizeAccountEmail(email: string | null | undefined): string | null {
+  const normalized = email?.trim();
+  return normalized && normalized.length > 0 ? normalized : null;
+}
+
+/** Resolve the account-bound Codex usage shown by the composer. */
+export function resolveComposerCodexUsage(input: {
+  provider: ProviderDriverKind;
+  session: OrchestrationSession | null;
+  sessionRateLimits: ServerProviderRateLimits | null;
+  sessionRateLimitsError?: string | null | undefined;
+  providerRateLimits: ServerProviderRateLimits | null;
+  providerEmail?: string | null | undefined;
+}): ComposerCodexUsage {
+  if (input.provider !== "codex") {
+    return { rateLimits: null, accountEmail: null };
+  }
+
+  const session = input.session;
+  if (session === null) {
+    return {
+      rateLimits: input.providerRateLimits,
+      accountEmail: normalizeAccountEmail(input.providerEmail),
+    };
+  }
+  const status = session.status;
+  if (status === "idle" || status === "stopped") {
+    return {
+      rateLimits: input.providerRateLimits,
+      accountEmail: normalizeAccountEmail(input.providerEmail),
+    };
+  }
+  if (status !== "ready" && status !== "running") {
+    return { rateLimits: null, accountEmail: null };
+  }
+  // The query keeps its previous success value while a refresh fails. Never
+  // present that cached snapshot as the current session's account or quota.
+  if (input.sessionRateLimitsError !== undefined && input.sessionRateLimitsError !== null) {
+    return { rateLimits: null, accountEmail: null };
+  }
+
+  const fetchedAt = Date.parse(input.sessionRateLimits?.fetchedAt ?? "");
+  const sessionStartedAt = Date.parse(session.startedAt ?? session.updatedAt);
+  if (!Number.isFinite(fetchedAt) || fetchedAt <= sessionStartedAt) {
+    return { rateLimits: null, accountEmail: null };
+  }
+
+  return {
+    rateLimits: input.sessionRateLimits,
+    accountEmail: normalizeAccountEmail(input.sessionRateLimits?.email),
+  };
+}
+
 export function resolveComposerCodexRateLimits(input: {
   provider: ProviderDriverKind;
   session: OrchestrationSession | null;
   sessionRateLimits: ServerProviderRateLimits | null;
   providerRateLimits: ServerProviderRateLimits | null;
 }): ServerProviderRateLimits | null {
-  if (input.provider !== "codex") return null;
-
-  const session = input.session;
-  if (session === null) return input.providerRateLimits;
-  const status = session.status;
-  if (status === "idle" || status === "stopped") return input.providerRateLimits;
-  if (status !== "ready" && status !== "running") return null;
-
-  const fetchedAt = Date.parse(input.sessionRateLimits?.fetchedAt ?? "");
-  const sessionStartedAt = Date.parse(session.startedAt ?? session.updatedAt);
-  return Number.isFinite(fetchedAt) && fetchedAt > sessionStartedAt
-    ? input.sessionRateLimits
-    : null;
+  return resolveComposerCodexUsage(input).rateLimits;
 }
 
 export type ComposerProviderState = {

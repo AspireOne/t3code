@@ -1,9 +1,36 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { ServerProvider } from "@t3tools/contracts";
 
-import { bindCodexRateLimits, normalizeCodexRateLimits } from "./CodexRateLimits.ts";
+import {
+  bindCodexRateLimits,
+  codexAccountEmailFromAccount,
+  normalizeCodexRateLimits,
+  normalizeCodexSessionRateLimits,
+} from "./CodexRateLimits.ts";
 
 const fetchedAt = "2026-08-29T12:00:00.000Z";
+
+describe("codexAccountEmailFromAccount", () => {
+  it("trims a ChatGPT account email", () => {
+    expect(
+      codexAccountEmailFromAccount({
+        type: "chatgpt",
+        email: "  account@example.com  ",
+        planType: "plus",
+      }),
+    ).toBe("account@example.com");
+  });
+
+  it("omits missing and non-ChatGPT account emails", () => {
+    expect(
+      codexAccountEmailFromAccount({ type: "chatgpt", email: null, planType: "plus" }),
+    ).toBeUndefined();
+    expect(
+      codexAccountEmailFromAccount({ type: "chatgpt", email: "   ", planType: "plus" }),
+    ).toBeUndefined();
+    expect(codexAccountEmailFromAccount({ type: "apiKey" })).toBeUndefined();
+  });
+});
 
 describe("normalizeCodexRateLimits", () => {
   it("prefers the Codex bucket and orders windows by duration", () => {
@@ -85,6 +112,45 @@ describe("normalizeCodexRateLimits", () => {
         fetchedAt,
       ),
     ).toBeUndefined();
+  });
+});
+
+describe("normalizeCodexSessionRateLimits", () => {
+  const account = {
+    type: "chatgpt" as const,
+    email: "  active@example.com  ",
+    planType: "plus" as const,
+  };
+  const response = {
+    rateLimits: {
+      primary: { usedPercent: 41, windowDurationMins: 300, resetsAt: 1_900_000_000 },
+    },
+  };
+
+  it("keeps the account email paired with the normalized live quota", () => {
+    expect(normalizeCodexSessionRateLimits(account, response, fetchedAt)).toEqual({
+      fetchedAt,
+      email: "active@example.com",
+      windows: [
+        {
+          windowDurationMins: 300,
+          usedPercent: 41,
+          resetsAt: "2030-03-17T17:46:40.000Z",
+        },
+      ],
+    });
+  });
+
+  it("retains the account identity when no usable quota window is returned", () => {
+    expect(normalizeCodexSessionRateLimits(account, undefined, fetchedAt)).toEqual({
+      fetchedAt,
+      email: "active@example.com",
+      windows: [],
+    });
+  });
+
+  it("does not create a session quota snapshot for non-ChatGPT accounts", () => {
+    expect(normalizeCodexSessionRateLimits({ type: "apiKey" }, response, fetchedAt)).toBeNull();
   });
 });
 

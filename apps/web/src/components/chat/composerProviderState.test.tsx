@@ -13,6 +13,7 @@ import {
   getComposerPromptInjectionState,
   getComposerProviderState,
   resolveComposerCodexRateLimits,
+  resolveComposerCodexUsage,
   renderProviderTraitsMenuContent,
   renderProviderTraitsPicker,
 } from "./composerProviderState";
@@ -24,7 +25,11 @@ import {
 const PROVIDER: ProviderDriverKind = ProviderDriverKind.make("codex");
 const MODEL = "test-model";
 
-const limits = (usedPercent: number, fetchedAt: string): ServerProviderRateLimits => ({
+const limits = (
+  usedPercent: number,
+  fetchedAt: string,
+  email?: string,
+): ServerProviderRateLimits => ({
   fetchedAt,
   windows: [
     {
@@ -33,6 +38,7 @@ const limits = (usedPercent: number, fetchedAt: string): ServerProviderRateLimit
       resetsAt: "2030-03-17T17:46:40.000Z",
     },
   ],
+  ...(email ? { email } : {}),
 });
 
 const session = (
@@ -134,6 +140,73 @@ describe("resolveComposerCodexRateLimits", () => {
         providerRateLimits: newGlobalAccount,
       }),
     ).toBeNull();
+  });
+});
+
+describe("resolveComposerCodexUsage", () => {
+  const oldAccount = limits(81, "2026-09-03T10:01:00.000Z", "old@example.com");
+  const newGlobalAccount = limits(24, "2026-09-03T10:02:00.000Z", "new@example.com");
+
+  it("keeps the live session email paired with its live quota", () => {
+    expect(
+      resolveComposerCodexUsage({
+        provider: PROVIDER,
+        session: session("running"),
+        sessionRateLimits: oldAccount,
+        providerRateLimits: newGlobalAccount,
+        providerEmail: "new@example.com",
+      }),
+    ).toEqual({ rateLimits: oldAccount, accountEmail: "old@example.com" });
+  });
+
+  it("does not fall back to a global email while a live session is unreadable", () => {
+    expect(
+      resolveComposerCodexUsage({
+        provider: PROVIDER,
+        session: session("running"),
+        sessionRateLimits: null,
+        providerRateLimits: newGlobalAccount,
+        providerEmail: "new@example.com",
+      }),
+    ).toEqual({ rateLimits: null, accountEmail: null });
+  });
+
+  it("rejects a cached live snapshot after its refresh fails", () => {
+    expect(
+      resolveComposerCodexUsage({
+        provider: PROVIDER,
+        session: session("running"),
+        sessionRateLimits: oldAccount,
+        sessionRateLimitsError: "Codex session rate limits failed",
+        providerRateLimits: newGlobalAccount,
+        providerEmail: "new@example.com",
+      }),
+    ).toEqual({ rateLimits: null, accountEmail: null });
+  });
+
+  it("uses the selected provider email only when no Codex runtime is active", () => {
+    expect(
+      resolveComposerCodexUsage({
+        provider: PROVIDER,
+        session: session("stopped"),
+        sessionRateLimits: oldAccount,
+        providerRateLimits: newGlobalAccount,
+        providerEmail: " new@example.com ",
+      }),
+    ).toEqual({ rateLimits: newGlobalAccount, accountEmail: "new@example.com" });
+  });
+
+  it("rejects an email from before the current session generation", () => {
+    const stale = limits(81, "2026-09-03T09:59:00.000Z", "old@example.com");
+    expect(
+      resolveComposerCodexUsage({
+        provider: PROVIDER,
+        session: session("ready"),
+        sessionRateLimits: stale,
+        providerRateLimits: newGlobalAccount,
+        providerEmail: "new@example.com",
+      }),
+    ).toEqual({ rateLimits: null, accountEmail: null });
   });
 });
 

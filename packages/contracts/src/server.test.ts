@@ -53,6 +53,7 @@ describe("ServerProvider", () => {
       ...baseProviderSnapshot,
       rateLimits: {
         fetchedAt: "2026-04-10T00:01:00.000Z",
+        email: "active@example.com",
         windows: [
           {
             windowDurationMins: 300,
@@ -71,6 +72,19 @@ describe("ServerProvider", () => {
     expect(parsed.rateLimits?.windows.map((window) => window.windowDurationMins)).toEqual([
       300, 10_080,
     ]);
+    expect(parsed.rateLimits?.email).toBe("active@example.com");
+  });
+
+  it("keeps older rate-limit snapshots valid without account email metadata", () => {
+    const parsed = decodeServerProvider({
+      ...baseProviderSnapshot,
+      rateLimits: {
+        fetchedAt: "2026-04-10T00:01:00.000Z",
+        windows: [],
+      },
+    });
+
+    expect(parsed.rateLimits?.email).toBeUndefined();
   });
 
   it("defaults one-click update support when decoding older advisory snapshots", () => {

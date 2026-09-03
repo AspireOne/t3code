@@ -7,6 +7,15 @@ import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import type * as CodexSchema from "effect-codex-app-server/schema";
 
+/** Return the normalized email for a ChatGPT-authenticated Codex account. */
+export function codexAccountEmailFromAccount(
+  account: CodexSchema.V2GetAccountResponse["account"],
+): string | undefined {
+  if (!account || account.type !== "chatgpt") return undefined;
+  const email = account.email?.trim();
+  return email && email.length > 0 ? email : undefined;
+}
+
 export type CodexRateLimitAccountKey = `chatgpt:${string}`;
 
 export function codexRateLimitAccountKeyFromAccount(
@@ -83,4 +92,21 @@ export function normalizeCodexRateLimits(
     .toSorted((left, right) => left.windowDurationMins - right.windowDurationMins);
 
   return windows.length > 0 ? { fetchedAt, windows } : undefined;
+}
+
+/** Normalize a live Codex session's account and quota response together. */
+export function normalizeCodexSessionRateLimits(
+  account: CodexSchema.V2GetAccountResponse["account"],
+  response: CodexSchema.V2GetAccountRateLimitsResponse | undefined,
+  fetchedAt: string,
+): ServerProviderRateLimits | null {
+  if (codexRateLimitAccountKeyFromAccount(account) === null) return null;
+
+  const normalized = response ? normalizeCodexRateLimits(response, fetchedAt) : undefined;
+  const email = codexAccountEmailFromAccount(account);
+  return {
+    fetchedAt,
+    windows: normalized?.windows ?? [],
+    ...(email ? { email } : {}),
+  };
 }

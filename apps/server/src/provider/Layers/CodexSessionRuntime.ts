@@ -44,7 +44,8 @@ import { buildCodexDeveloperInstructions } from "../CodexDeveloperInstructions.t
 import { type CodexRateLimitCoordinatorShape } from "../CodexRateLimitCoordinator.ts";
 import {
   codexRateLimitAccountKeyFromAccount,
-  normalizeCodexRateLimits,
+  normalizeCodexSessionRateLimits,
+  type CodexRateLimitAccountKey,
 } from "../CodexRateLimits.ts";
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
 
@@ -189,6 +190,52 @@ export interface CodexSessionRuntimeSendTurnInput {
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort | undefined;
   readonly interactionMode?: ProviderInteractionMode;
+}
+
+export type CodexAccountRateLimitsReadResult = {
+  readonly account: EffectCodexSchema.V2GetAccountResponse["account"];
+  readonly accountKey: CodexRateLimitAccountKey | null;
+  readonly rateLimits?: EffectCodexSchema.V2GetAccountRateLimitsResponse;
+};
+
+type CodexAccountRateLimitsReader<E> = {
+  readonly readAccount: () => Effect.Effect<EffectCodexSchema.V2GetAccountResponse, E>;
+  readonly readRateLimits: () => Effect.Effect<EffectCodexSchema.V2GetAccountRateLimitsResponse, E>;
+};
+
+const MAX_ACCOUNT_RATE_LIMIT_READ_RETRIES = 1;
+
+/** Read Codex account limits without pairing a quota response to another account. */
+export function readCodexAccountRateLimits<E>(
+  input: CodexAccountRateLimitsReader<E>,
+): Effect.Effect<CodexAccountRateLimitsReadResult, E> {
+  const readStable = (
+    retriesRemaining: number,
+  ): Effect.Effect<CodexAccountRateLimitsReadResult, E> =>
+    Effect.gen(function* () {
+      const account = yield* input.readAccount();
+      const accountKey = codexRateLimitAccountKeyFromAccount(account.account);
+      if (accountKey === null) return { account: account.account, accountKey } as const;
+
+      const rateLimits = yield* input.readRateLimits();
+      const confirmedAccount = yield* input.readAccount();
+      const confirmedAccountKey = codexRateLimitAccountKeyFromAccount(confirmedAccount.account);
+      if (confirmedAccountKey === accountKey) {
+        return {
+          account: confirmedAccount.account,
+          accountKey: confirmedAccountKey,
+          rateLimits,
+        } as const;
+      }
+
+      if (retriesRemaining > 0) return yield* readStable(retriesRemaining - 1);
+
+      // The account changed during both reads. Keep the latest identity, but
+      // discard limits whose account cannot be established.
+      return { account: confirmedAccount.account, accountKey: confirmedAccountKey } as const;
+    });
+
+  return readStable(MAX_ACCOUNT_RATE_LIMIT_READ_RETRIES);
 }
 
 export interface CodexThreadTurnSnapshot {
@@ -1369,17 +1416,15 @@ export const makeCodexSessionRuntime = (
     );
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
     const readAccountRateLimits = () =>
-      Effect.gen(function* () {
-        const account = yield* client.request("account/read", {});
-        const accountKey = codexRateLimitAccountKeyFromAccount(account.account);
-        if (accountKey === null) return { accountKey } as const;
-        const rateLimits = yield* client.request("account/rateLimits/read", undefined);
-        return { accountKey, rateLimits } as const;
+      readCodexAccountRateLimits({
+        readAccount: () => client.request("account/read", {}),
+        readRateLimits: () => client.request("account/rateLimits/read", undefined),
       });
     const readRateLimits = Effect.gen(function* () {
       const result = yield* readAccountRateLimits();
-      if (result.accountKey === null || result.rateLimits === undefined) return null;
-      return normalizeCodexRateLimits(result.rateLimits, yield* nowIso) ?? null;
+      if (result.accountKey === null) return null;
+      const fetchedAt = yield* nowIso;
+      return normalizeCodexSessionRateLimits(result.account, result.rateLimits, fetchedAt);
     }).pipe(
       Effect.timeoutOrElse({
         duration: "10 seconds",
