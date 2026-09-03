@@ -41,6 +41,14 @@ import {
   type EnvironmentRpcInput,
 } from "../rpc/client.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
+import {
+  applyServerConfigProjection,
+  type ServerConfigProjection,
+  withoutEnvironmentThemes,
+} from "./serverConfigProjection.ts";
+
+// Exported server state includes this type in its inferred public return type.
+export type { ServerConfigProjection } from "./serverConfigProjection.ts";
 
 export type ServerUpdateStage = "downloading" | "installing" | "resuming";
 
@@ -262,75 +270,6 @@ export function resolveServerUpdateProgressResult<E>(
   return Effect.fail(new ServerUpdateProgressIncompleteError({ targetVersion }));
 }
 
-export interface ServerConfigProjection {
-  readonly config: ServerConfig;
-  readonly latestEvent: ServerConfigStreamEvent;
-  readonly source: "cache" | "live";
-}
-
-export function applyServerConfigProjection(
-  current: Option.Option<ServerConfigProjection>,
-  event: ServerConfigStreamEvent,
-): Option.Option<ServerConfigProjection> {
-  switch (event.type) {
-    case "snapshot": {
-      // A snapshot never carries published themes -- the theme stream owns
-      // them -- so taking it wholesale would clear the set on every reconnect
-      // and repaint anyone wearing one until the follow-up event landed.
-      // Only from a server that still streams them. Reconnecting to one that
-      // predates the feature must drop the set rather than leave a palette on
-      // screen that nothing will ever update again.
-      const carried =
-        event.config.environment.capabilities.environmentThemes === true && Option.isSome(current)
-          ? current.value.config.environmentThemes
-          : undefined;
-      return Option.some({
-        config:
-          carried === undefined ? event.config : { ...event.config, environmentThemes: carried },
-        latestEvent: event,
-        source: "live" as const,
-      });
-    }
-    case "keybindingsUpdated":
-      return Option.map(current, (projection) => ({
-        config: {
-          ...projection.config,
-          keybindings: event.payload.keybindings,
-          issues: event.payload.issues,
-        },
-        latestEvent: event,
-        source: "live",
-      }));
-    case "providerStatuses":
-      return Option.map(current, (projection) => ({
-        config: {
-          ...projection.config,
-          providers: event.payload.providers,
-        },
-        latestEvent: event,
-        source: "live",
-      }));
-    case "settingsUpdated":
-      return Option.map(current, (projection) => ({
-        config: {
-          ...projection.config,
-          settings: event.payload.settings,
-        },
-        latestEvent: event,
-        source: "live",
-      }));
-    case "environmentThemesUpdated":
-      return Option.map(current, (projection) => ({
-        config: {
-          ...projection.config,
-          environmentThemes: event.payload.themes.length > 0 ? event.payload.themes : undefined,
-        },
-        latestEvent: event,
-        source: "live",
-      }));
-  }
-}
-
 export function projectServerConfig(
   current: Option.Option<ServerConfigProjection>,
   event: ServerConfigStreamEvent,
@@ -354,9 +293,7 @@ export function stripEphemeralServerConfig(config: ServerConfig): ServerConfig {
     return persistentProvider;
   });
   const withoutRateLimits = providersChanged ? { ...config, providers } : config;
-  if (withoutRateLimits.environmentThemes === undefined) return withoutRateLimits;
-  const { environmentThemes: _environmentThemes, ...persistentConfig } = withoutRateLimits;
-  return persistentConfig;
+  return withoutEnvironmentThemes(withoutRateLimits);
 }
 
 /**
