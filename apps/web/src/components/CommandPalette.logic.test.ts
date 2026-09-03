@@ -4,6 +4,7 @@ import type { Thread } from "../types";
 import {
   browseInputEndPaddingClass,
   buildBrowseGroups,
+  buildDeleteThreadActionItem,
   buildRenameThreadActionItem,
   buildThreadActionItems,
   enumerateCommandPaletteItems,
@@ -11,6 +12,7 @@ import {
   filterCommandPaletteGroups,
   normalizeSearchText,
   reduceCommandPaletteUiState,
+  shouldShowDesktopDeleteThreadAction,
   type CommandPaletteGroup,
 } from "./CommandPalette.logic";
 
@@ -174,6 +176,60 @@ describe("buildRenameThreadActionItem", () => {
       environmentId: thread.environmentId,
       threadId: thread.id,
     });
+  });
+});
+
+describe("buildDeleteThreadActionItem", () => {
+  it("creates a searchable action that invokes deletion for the scoped current thread", async () => {
+    const thread = makeThread();
+    const deleteThread = vi.fn(async () => undefined);
+    const item = buildDeleteThreadActionItem({
+      thread,
+      icon: null,
+      deleteThread,
+    });
+
+    expect(item).toMatchObject({
+      value: "action:delete-thread",
+      title: "Delete thread",
+      searchTerms: ["delete thread", "delete", "remove conversation", "conversation"],
+    });
+    expect(
+      filterCommandPaletteGroups({
+        activeGroups: [{ value: "actions", label: "Actions", items: [item] }],
+        query: "delete thread",
+        isInSubmenu: false,
+        projectSearchItems: [],
+        threadSearchItems: [],
+      }),
+    ).toMatchObject([{ value: "actions", items: [item] }]);
+
+    await item.run();
+
+    expect(deleteThread).toHaveBeenCalledWith({
+      environmentId: thread.environmentId,
+      threadId: thread.id,
+    });
+  });
+});
+
+describe("shouldShowDesktopDeleteThreadAction", () => {
+  it("only exposes deletion for an active thread in the desktop client", () => {
+    const activeThread = makeThread();
+
+    expect(shouldShowDesktopDeleteThreadAction({ isDesktop: true, thread: activeThread })).toBe(
+      true,
+    );
+    expect(shouldShowDesktopDeleteThreadAction({ isDesktop: false, thread: activeThread })).toBe(
+      false,
+    );
+    expect(
+      shouldShowDesktopDeleteThreadAction({
+        isDesktop: true,
+        thread: makeThread({ archivedAt: "2026-03-02T00:00:00.000Z" }),
+      }),
+    ).toBe(false);
+    expect(shouldShowDesktopDeleteThreadAction({ isDesktop: true, thread: null })).toBe(false);
   });
 });
 

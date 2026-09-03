@@ -35,6 +35,7 @@ import {
   type SourceControlDiscoveryResult,
   type SourceControlProviderKind,
   type SourceControlRepositoryInfo,
+  type ScopedThreadRef,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
 } from "@t3tools/contracts";
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
@@ -54,6 +55,7 @@ import {
   SettingsIcon,
   SquarePenIcon,
   TextSearchIcon,
+  Trash2Icon,
 } from "lucide-react";
 import {
   useCallback,
@@ -71,6 +73,7 @@ import { useAtomValue } from "@effect/atom-react";
 
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
+import { isElectron } from "../env";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
@@ -86,7 +89,13 @@ import { vcsEnvironment } from "../state/vcs";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
-import { readThreadCanFork, useProject, useProjects, useThreadShells } from "../state/entities";
+import {
+  readThreadCanFork,
+  readThreadShell,
+  useProject,
+  useProjects,
+  useThreadShells,
+} from "../state/entities";
 import { useThreadSearch } from "../state/queries";
 import * as ThreadPr from "./ThreadStatusIndicators";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
@@ -127,6 +136,7 @@ import {
   ADDON_ICON_CLASS,
   browseInputEndPaddingClass,
   buildBrowseGroups,
+  buildDeleteThreadActionItem,
   buildProjectActionItems,
   buildRenameThreadActionItem,
   buildRootGroups,
@@ -143,6 +153,7 @@ import {
   ITEM_ICON_CLASS,
   RECENT_THREAD_LIMIT,
   reduceCommandPaletteUiState,
+  shouldShowDesktopDeleteThreadAction,
   type SearchOverlayMode,
 } from "./CommandPalette.logic";
 import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
@@ -622,7 +633,7 @@ function OpenCommandPaletteDialog(props: {
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
-  const { forkThread } = useThreadActions();
+  const { confirmAndDeleteThread, forkThread } = useThreadActions();
   const projects = useProjects();
   const changeRequestSnapshotByKey = useAtomValue(ThreadPr.threadChangeRequestSnapshotsAtom);
   const activeThreadProject = useProject(
@@ -683,6 +694,28 @@ function OpenCommandPaletteDialog(props: {
       );
     }
   }, [activeThreadReferenceCopyTarget]);
+  const deleteActiveThread = useCallback(
+    async (threadRef: ScopedThreadRef) => {
+      const result = await confirmAndDeleteThread(threadRef);
+      if (
+        result._tag === "Failure" &&
+        !isAtomCommandInterrupted(result) &&
+        // A failure after the thread is gone is post-delete worktree cleanup;
+        // deleteThread already reports that separately.
+        readThreadShell(threadRef) !== null
+      ) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to delete thread",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
+    },
+    [confirmAndDeleteThread],
+  );
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -1639,6 +1672,19 @@ function OpenCommandPaletteDialog(props: {
         thread: activeThread,
         icon: <PencilIcon className={ITEM_ICON_CLASS} />,
         requestRename: requestThreadRename,
+      }),
+    );
+  }
+
+  if (
+    activeThread &&
+    shouldShowDesktopDeleteThreadAction({ isDesktop: isElectron, thread: activeThread })
+  ) {
+    actionItems.push(
+      buildDeleteThreadActionItem({
+        thread: activeThread,
+        icon: <Trash2Icon className={ITEM_ICON_CLASS} />,
+        deleteThread: deleteActiveThread,
       }),
     );
   }

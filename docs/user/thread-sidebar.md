@@ -49,3 +49,6 @@ be selected again. The option is hidden when the connected environment needs a s
 
 To rename the active thread, open the Command Palette and choose **Rename thread**. This opens the
 same inline editor as the thread context menu.
+
+On desktop, choose **Delete thread** from the Command Palette to delete the active thread. It uses
+the same confirmation and cleanup as **Delete** in the thread context menu.

@@ -130,6 +130,30 @@ export function buildRenameThreadActionItem(input: {
   };
 }
 
+export function shouldShowDesktopDeleteThreadAction(input: {
+  readonly isDesktop: boolean;
+  readonly thread: Pick<SidebarThreadSummary, "archivedAt"> | null;
+}): boolean {
+  return input.isDesktop && input.thread !== null && input.thread.archivedAt === null;
+}
+
+export function buildDeleteThreadActionItem(input: {
+  thread: Pick<SidebarThreadSummary, "environmentId" | "id">;
+  icon: ReactNode;
+  deleteThread: (threadRef: ScopedThreadRef) => Promise<void>;
+}): CommandPaletteActionItem {
+  return {
+    kind: "action",
+    value: "action:delete-thread",
+    searchTerms: ["delete thread", "delete", "remove conversation", "conversation"],
+    title: "Delete thread",
+    icon: input.icon,
+    run: async () => {
+      await input.deleteThread(scopeThreadRef(input.thread.environmentId, input.thread.id));
+    },
+  };
+}
+
 export interface CommandPaletteSubmenuItem extends CommandPaletteItem {
   readonly kind: "submenu";
   readonly addonIcon: ReactNode;
