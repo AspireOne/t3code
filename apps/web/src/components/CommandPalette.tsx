@@ -48,6 +48,7 @@ import {
   LinkIcon,
   MessageSquareIcon,
   PaletteIcon,
+  RotateCcwIcon,
   ServerIcon,
   SettingsIcon,
   SquarePenIcon,
@@ -1663,6 +1664,19 @@ function OpenCommandPaletteDialog(props: {
       openOverlayMode("files");
     },
   });
+
+  const restartDesktop = window.desktopBridge?.restart;
+  if (restartDesktop) {
+    actionItems.push({
+      kind: "action",
+      value: "action:restart-desktop",
+      searchTerms: ["restart", "relaunch", "reload", "codex account", "sign in"],
+      title: "Restart T3 Code",
+      description: "Restarts the desktop app and interrupts active agent runs.",
+      icon: <RotateCcwIcon className={ITEM_ICON_CLASS} />,
+      run: restartDesktop,
+    });
+  }
 
   actionItems.push({
     kind: "action",

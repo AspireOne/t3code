@@ -18,7 +18,11 @@ import * as DesktopWindow from "../window/DesktopWindow.ts";
 
 function makeElectronAppLayer(
   appListeners: Map<string, (...args: readonly unknown[]) => void>,
-  quit: Effect.Effect<void> = Effect.void,
+  input: {
+    readonly quit?: Effect.Effect<void>;
+    readonly exit?: (code: number) => Effect.Effect<void>;
+    readonly relaunch?: (options: Electron.RelaunchOptions) => Effect.Effect<void>;
+  } = {},
 ) {
   const registerListener = (eventName: string, listener: (...args: readonly unknown[]) => void) =>
     Effect.acquireRelease(
@@ -36,9 +40,9 @@ function makeElectronAppLayer(
     name: Effect.succeed("T3 Code"),
     systemLocale: Effect.succeed("en-US"),
     whenReady: Effect.void,
-    quit,
-    exit: () => Effect.void,
-    relaunch: () => Effect.void,
+    quit: input.quit ?? Effect.void,
+    exit: input.exit ?? (() => Effect.void),
+    relaunch: input.relaunch ?? (() => Effect.void),
     setPath: () => Effect.void,
     setName: () => Effect.void,
     setAboutPanelOptions: () => Effect.void,
@@ -199,7 +203,7 @@ describe("DesktopLifecycle", () => {
       } as DesktopEnvironment.DesktopEnvironment["Service"]);
 
       const layer = DesktopLifecycle.layer.pipe(
-        Layer.provideMerge(makeElectronAppLayer(appListeners, quit)),
+        Layer.provideMerge(makeElectronAppLayer(appListeners, { quit })),
         Layer.provideMerge(electronThemeLayer),
         Layer.provideMerge(makeElectronWindowLayer(destroyAll)),
         Layer.provideMerge(makeDesktopWindowLayer({ flushMainWindowBounds })),
@@ -266,6 +270,68 @@ describe("DesktopLifecycle", () => {
           appListeners.get("activate")?.();
 
           assert.equal(activationCount, 0);
+        }),
+      ).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("starts one relaunch while shutdown is already in progress", () =>
+    Effect.gen(function* () {
+      const shutdownRequested = yield* Deferred.make<void>();
+      const allowShutdown = yield* Deferred.make<void>();
+      const exitRequested = yield* Deferred.make<number>();
+      let shutdownRequestCount = 0;
+      let relaunchCount = 0;
+
+      const desktopShutdownLayer = Layer.succeed(DesktopShutdown.DesktopShutdown, {
+        request: Effect.sync(() => {
+          shutdownRequestCount += 1;
+        }).pipe(Effect.andThen(Deferred.succeed(shutdownRequested, undefined)), Effect.asVoid),
+        awaitRequest: Deferred.await(shutdownRequested),
+        markComplete: Deferred.succeed(allowShutdown, undefined).pipe(Effect.asVoid),
+        awaitComplete: Deferred.await(allowShutdown),
+        isComplete: Deferred.isDone(allowShutdown),
+      });
+      const environmentLayer = Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
+        platform: "darwin",
+        isDevelopment: false,
+      } as DesktopEnvironment.DesktopEnvironment["Service"]);
+      const layer = DesktopLifecycle.layer.pipe(
+        Layer.provideMerge(
+          makeElectronAppLayer(new Map(), {
+            exit: (code) => Deferred.succeed(exitRequested, code).pipe(Effect.asVoid),
+            relaunch: () =>
+              Effect.sync(() => {
+                relaunchCount += 1;
+              }),
+          }),
+        ),
+        Layer.provideMerge(electronThemeLayer),
+        Layer.provideMerge(makeElectronWindowLayer()),
+        Layer.provideMerge(makeDesktopWindowLayer()),
+        Layer.provideMerge(makeDesktopTrayLayer()),
+        Layer.provideMerge(environmentLayer),
+        Layer.provideMerge(desktopShutdownLayer),
+        Layer.provideMerge(DesktopState.layer),
+      );
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const lifecycle = yield* DesktopLifecycle.DesktopLifecycle;
+          const state = yield* DesktopState.DesktopState;
+
+          yield* lifecycle.relaunch("command-palette");
+          yield* lifecycle.relaunch("command-palette");
+          assert.isTrue(yield* Ref.get(state.quitting));
+
+          yield* Deferred.await(shutdownRequested);
+          yield* Effect.yieldNow;
+          assert.equal(shutdownRequestCount, 1);
+
+          yield* Deferred.succeed(allowShutdown, undefined);
+          assert.equal(yield* Deferred.await(exitRequested), 0);
+          assert.equal(shutdownRequestCount, 1);
+          assert.equal(relaunchCount, 1);
         }),
       ).pipe(Effect.provide(layer));
     }),
