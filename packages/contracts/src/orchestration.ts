@@ -5,6 +5,7 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as Struct from "effect/Struct";
 import { ProviderOptionSelections } from "./model.ts";
 import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
+import { PreviewAnnotationPayloadSchema } from "./ipc.ts";
 import {
   ApprovalRequestId,
   CheckpointRef,
@@ -427,6 +428,93 @@ export const ThreadTitleRegeneration = Schema.Struct({
 });
 export type ThreadTitleRegeneration = typeof ThreadTitleRegeneration.Type;
 
+export const OrchestrationPendingTurnStart = Schema.Struct({
+  messageId: MessageId,
+  requestedAt: IsoDateTime,
+});
+export type OrchestrationPendingTurnStart = typeof OrchestrationPendingTurnStart.Type;
+
+const OrchestrationQueuedTerminalContext = Schema.Struct({
+  id: Schema.String,
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+  terminalId: Schema.String,
+  terminalLabel: Schema.String,
+  lineStart: Schema.Number,
+  lineEnd: Schema.Number,
+  text: Schema.String,
+});
+
+const OrchestrationQueuedElementContext = Schema.Struct({
+  id: Schema.String,
+  threadId: ThreadId,
+  pickedAt: IsoDateTime,
+  pageUrl: Schema.String,
+  pageTitle: Schema.NullOr(Schema.String),
+  tagName: Schema.String,
+  selector: Schema.NullOr(Schema.String),
+  htmlPreview: Schema.String,
+  componentName: Schema.NullOr(Schema.String),
+  source: Schema.NullOr(
+    Schema.Struct({
+      functionName: Schema.NullOr(Schema.String),
+      fileName: Schema.NullOr(Schema.String),
+      lineNumber: Schema.NullOr(Schema.Number),
+      columnNumber: Schema.NullOr(Schema.Number),
+    }),
+  ),
+  styles: Schema.String,
+});
+
+const OrchestrationQueuedReviewComment = Schema.Struct({
+  id: Schema.String,
+  sectionId: Schema.String,
+  sectionTitle: Schema.String,
+  filePath: Schema.String,
+  startIndex: Schema.Number,
+  endIndex: Schema.Number,
+  rangeLabel: Schema.String,
+  text: Schema.String,
+  diff: Schema.String,
+  fenceLanguage: Schema.optional(Schema.String),
+  selection: Schema.optional(
+    Schema.Struct({
+      start: Schema.Number,
+      side: Schema.Literals(["additions", "deletions"]),
+      end: Schema.Number,
+      endSide: Schema.Literals(["additions", "deletions"]),
+    }),
+  ),
+});
+
+/**
+ * The editable composer state retained with a queued message. `prompt` is
+ * kept separately from the provider-ready message text so restoring a queue
+ * entry does not expose serialized context blocks in the editor.
+ */
+export const OrchestrationQueuedComposerState = Schema.Struct({
+  prompt: Schema.String,
+  previewText: Schema.String,
+  terminalContexts: Schema.Array(OrchestrationQueuedTerminalContext),
+  elementContexts: Schema.Array(OrchestrationQueuedElementContext),
+  previewAnnotations: Schema.Array(PreviewAnnotationPayloadSchema),
+  reviewComments: Schema.Array(OrchestrationQueuedReviewComment),
+});
+export type OrchestrationQueuedComposerState = typeof OrchestrationQueuedComposerState.Type;
+
+export const OrchestrationQueuedMessage = Schema.Struct({
+  messageId: MessageId,
+  text: Schema.String,
+  attachments: Schema.Array(ChatAttachment),
+  modelSelection: Schema.optional(ModelSelection),
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  composerState: Schema.optional(OrchestrationQueuedComposerState),
+  queuedAt: IsoDateTime,
+});
+export type OrchestrationQueuedMessage = typeof OrchestrationQueuedMessage.Type;
+
 export const ThreadLinkedPullRequest = Schema.Struct({
   projectId: ProjectId,
   repository: TrimmedNonEmptyString,
@@ -481,6 +569,12 @@ export const OrchestrationThread = Schema.Struct({
   messages: Schema.Array(OrchestrationMessage),
   proposedPlans: Schema.Array(OrchestrationProposedPlan).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  queuedMessages: Schema.Array(OrchestrationQueuedMessage).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  pendingTurnStart: Schema.NullOr(OrchestrationPendingTurnStart).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   activities: Schema.Array(OrchestrationThreadActivity),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
@@ -951,6 +1045,52 @@ const ClientThreadTurnStartCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+export const ThreadTurnQueueCommand = Schema.Struct({
+  type: Schema.Literal("thread.turn.queue"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  message: Schema.Struct({
+    messageId: MessageId,
+    role: Schema.Literal("user"),
+    text: Schema.String,
+    attachments: Schema.Array(ChatAttachment),
+  }),
+  modelSelection: Schema.optional(ModelSelection),
+  runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
+  interactionMode: ProviderInteractionMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
+  ),
+  sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  composerState: Schema.optional(OrchestrationQueuedComposerState),
+  createdAt: IsoDateTime,
+});
+
+const ClientThreadTurnQueueCommand = Schema.Struct({
+  type: Schema.Literal("thread.turn.queue"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  message: Schema.Struct({
+    messageId: MessageId,
+    role: Schema.Literal("user"),
+    text: Schema.String,
+    attachments: Schema.Array(Schema.Union([UploadChatAttachment, ChatAttachment])),
+  }),
+  modelSelection: Schema.optional(ModelSelection),
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  composerState: Schema.optional(OrchestrationQueuedComposerState),
+  createdAt: IsoDateTime,
+});
+
+const ThreadQueueRemoveCommand = Schema.Struct({
+  type: Schema.Literal("thread.queue.remove"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadTurnInterruptCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.interrupt"),
   commandId: CommandId,
@@ -1025,6 +1165,8 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ThreadTurnStartCommand,
+  ThreadTurnQueueCommand,
+  ThreadQueueRemoveCommand,
   ThreadTurnInterruptCommand,
   ThreadCompactCommand,
   ThreadApprovalRespondCommand,
@@ -1055,6 +1197,8 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ClientThreadTurnStartCommand,
+  ClientThreadTurnQueueCommand,
+  ThreadQueueRemoveCommand,
   ThreadTurnInterruptCommand,
   ThreadCompactCommand,
   ThreadApprovalRespondCommand,
@@ -1069,6 +1213,13 @@ const ThreadSessionSetCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   session: OrchestrationSession,
+  createdAt: IsoDateTime,
+});
+
+const ThreadQueueDrainCommand = Schema.Struct({
+  type: Schema.Literal("thread.queue.drain"),
+  commandId: CommandId,
+  threadId: ThreadId,
   createdAt: IsoDateTime,
 });
 
@@ -1140,6 +1291,7 @@ const ThreadTitleRegenerationCompleteCommand = Schema.Struct({
 const InternalOrchestrationCommand = Schema.Union([
   ThreadAutoSettleCommand,
   ThreadSessionSetCommand,
+  ThreadQueueDrainCommand,
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
   ThreadProposedPlanUpsertCommand,
@@ -1175,6 +1327,8 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.meta-updated",
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
+  "thread.message-queued",
+  "thread.queued-message-removed",
   "thread.message-sent",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
@@ -1362,6 +1516,26 @@ export const ThreadMessageSentPayload = Schema.Struct({
   streaming: Schema.Boolean,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
+});
+
+export const ThreadMessageQueuedPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  text: Schema.String,
+  attachments: Schema.Array(ChatAttachment),
+  modelSelection: Schema.optional(ModelSelection),
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  composerState: Schema.optional(OrchestrationQueuedComposerState),
+  queuedAt: IsoDateTime,
+});
+
+export const ThreadQueuedMessageRemovedPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  reason: Schema.Literals(["user", "dispatched"]),
+  removedAt: IsoDateTime,
 });
 
 export const ThreadTurnStartRequestedPayload = Schema.Struct({
@@ -1573,6 +1747,16 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.message-sent"),
     payload: ThreadMessageSentPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.message-queued"),
+    payload: ThreadMessageQueuedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.queued-message-removed"),
+    payload: ThreadQueuedMessageRemovedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

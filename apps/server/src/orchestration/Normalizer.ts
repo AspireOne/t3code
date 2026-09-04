@@ -129,7 +129,10 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
       } satisfies OrchestrationCommand;
     }
 
-    if (canonicalCommand.type !== "thread.turn.start") {
+    if (
+      canonicalCommand.type !== "thread.turn.start" &&
+      canonicalCommand.type !== "thread.turn.queue"
+    ) {
       return canonicalCommand as OrchestrationCommand;
     }
 
@@ -271,7 +274,11 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
 export const cleanupFailedUploadedAttachments = Effect.fn(
   "Normalizer.cleanupFailedUploadedAttachments",
 )(function* (command: ClientOrchestrationCommand, normalizedCommand: OrchestrationCommand) {
-  if (command.type !== "thread.turn.start" || normalizedCommand.type !== "thread.turn.start") {
+  if (
+    (command.type !== "thread.turn.start" && command.type !== "thread.turn.queue") ||
+    (normalizedCommand.type !== "thread.turn.start" &&
+      normalizedCommand.type !== "thread.turn.queue")
+  ) {
     return;
   }
 

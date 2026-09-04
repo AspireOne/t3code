@@ -32,6 +32,8 @@ import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
+import { ProjectionQueuedMessageRepository } from "../../persistence/Services/ProjectionQueuedMessages.ts";
+import { ProjectionQueuedMessageRepositoryLive } from "../../persistence/Layers/ProjectionQueuedMessages.ts";
 import * as CheckpointStore from "../../checkpointing/CheckpointStore.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ThreadBackgroundLivenessService } from "../ThreadBackgroundLiveness.ts";
@@ -896,12 +898,32 @@ const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
+  const projectionQueuedMessageRepository = yield* ProjectionQueuedMessageRepository;
   const serverSettingsService = yield* ServerSettingsService;
   const checkpointStore = yield* CheckpointStore.CheckpointStore;
   const providerCommandId = (event: ProviderRuntimeEvent, tag: string) =>
     crypto.randomUUIDv4.pipe(
       Effect.map((uuid) => CommandId.make(`provider:${event.eventId}:${tag}:${uuid}`)),
     );
+
+  const dispatchQueueDrain = Effect.fn("dispatchQueueDrain")(function* (
+    threadId: ThreadId,
+    event: ProviderRuntimeEvent,
+    now: string,
+  ) {
+    const queuedMessages = yield* projectionQueuedMessageRepository.listByThreadId({ threadId });
+    if (queuedMessages.length === 0) {
+      return;
+    }
+    yield* orchestrationEngine
+      .dispatch({
+        type: "thread.queue.drain",
+        commandId: yield* providerCommandId(event, "queue-drain"),
+        threadId,
+        createdAt: now,
+      })
+      .pipe(Effect.catchTag("OrchestrationCommandInvariantError", () => Effect.void));
+  });
 
   const turnMessageIdsByTurnKey = yield* Cache.make<string, Set<MessageId>>({
     capacity: TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY,
@@ -1542,6 +1564,7 @@ const make = Effect.gen(function* () {
           : Option.none();
       const hasPendingTurnStart =
         Option.isSome(pendingTurnStart) && thread.session?.status === "starting";
+      let drainQueueAfterTurnFinalize = false;
 
       const conflictsWithActiveTurn =
         activeTurnId !== null && eventTurnId !== undefined && !sameId(activeTurnId, eventTurnId);
@@ -1688,6 +1711,9 @@ const make = Effect.gen(function* () {
             },
             createdAt: now,
           });
+          drainQueueAfterTurnFinalize =
+            event.type === "turn.completed" &&
+            normalizeRuntimeTurnState(event.payload.state) === "completed";
         }
       }
 
@@ -1906,6 +1932,10 @@ const make = Effect.gen(function* () {
             updatedAt: now,
           });
         }
+      }
+
+      if (drainQueueAfterTurnFinalize) {
+        yield* dispatchQueueDrain(thread.id, event, now);
       }
 
       if (event.type === "session.exited") {
@@ -2128,4 +2158,7 @@ const make = Effect.gen(function* () {
 export const ProviderRuntimeIngestionLive = Layer.effect(
   ProviderRuntimeIngestionService,
   make,
-).pipe(Layer.provide(ProjectionTurnRepositoryLive));
+).pipe(
+  Layer.provide(ProjectionTurnRepositoryLive),
+  Layer.provide(ProjectionQueuedMessageRepositoryLive),
+);

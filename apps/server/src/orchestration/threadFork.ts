@@ -82,6 +82,8 @@ export function cloneThreadForFork(
         .filter((attachment) => attachment !== null),
       streaming: false,
     })),
+    queuedMessages: [],
+    pendingTurnStart: null,
     proposedPlans: source.proposedPlans.map((plan) => ({
       ...plan,
       id: forkedEntityId(targetThreadId, "plan", plan.id) as OrchestrationProposedPlanId,

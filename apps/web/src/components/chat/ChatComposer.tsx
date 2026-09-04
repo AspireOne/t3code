@@ -146,6 +146,7 @@ import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
+import { QueuedMessageList } from "./QueuedMessageList";
 import { ComposerControl, ComposerControlIcon, ComposerSelectControl } from "./ComposerControl";
 import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
 import {
@@ -525,6 +526,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   hasSendableContent: boolean;
   preserveComposerFocusOnPointerDown?: boolean;
   showSendWhileRunning?: boolean;
+  onQueue?: (() => void) | undefined;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
@@ -560,6 +562,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         hasSendableContent={props.hasSendableContent}
         preserveComposerFocusOnPointerDown={props.preserveComposerFocusOnPointerDown ?? false}
         showSendWhileRunning={props.showSendWhileRunning ?? false}
+        onQueue={props.onQueue}
         onPreviousPendingQuestion={props.onPreviousPendingQuestion}
         onInterrupt={props.onInterrupt}
         onImplementPlanInNewThread={props.onImplementPlanInNewThread}
@@ -634,6 +637,7 @@ export interface ChatComposerProps {
   activeThreadId: ThreadId | null;
   activeThreadEnvironmentId: EnvironmentId | undefined;
   activeThread: Thread | undefined;
+  queuedMessages: Thread["queuedMessages"];
   isServerThread: boolean;
   isLocalDraftThread: boolean;
   forceExpandedOnMobile: boolean;
@@ -711,6 +715,10 @@ export interface ChatComposerProps {
 
   // Callbacks
   onSend: (e?: { preventDefault: () => void }, intent?: ComposerSubmissionIntent) => void;
+  onMoveQueuedMessage: (message: Thread["queuedMessages"][number]) => void | Promise<void>;
+  onRemoveQueuedMessage: (
+    messageId: Thread["queuedMessages"][number]["messageId"],
+  ) => void | Promise<void>;
   onInterrupt: () => void;
   onNativeCompact: () => void;
   onImplementPlanInNewThread: () => void;
@@ -760,6 +768,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeThreadId,
     activeThreadEnvironmentId: _activeThreadEnvironmentId,
     activeThread,
+    queuedMessages,
     isServerThread: _isServerThread,
     isLocalDraftThread: _isLocalDraftThread,
     forceExpandedOnMobile,
@@ -806,6 +815,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerTerminalContextsRef,
     composerElementContextsRef,
     onSend,
+    onMoveQueuedMessage,
+    onRemoveQueuedMessage,
     onInterrupt,
     onNativeCompact,
     onImplementPlanInNewThread,
@@ -2376,6 +2387,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             shiftKey: event.shiftKey,
             modifierKey: event.metaKey || event.ctrlKey,
             isDraftThread: routeKind === "draft",
+            canQueue: _isServerThread && phase === "running" && activePendingProgress === null,
           })
         : null;
     if (submissionIntent) {
@@ -3505,6 +3517,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     >
       <ComposerBanner.Dock>
         <ComposerBanner.Column>
+          {queuedMessages.length > 0 ? (
+            <ComposerBanner.Attachment>
+              <ComposerBanner.Root className="p-1.5">
+                <QueuedMessageList
+                  queuedMessages={queuedMessages}
+                  disabled={Boolean(environmentUnavailable) || isSendBusy}
+                  onMoveToInput={onMoveQueuedMessage}
+                  onRemove={onRemoveQueuedMessage}
+                />
+              </ComposerBanner.Root>
+            </ComposerBanner.Attachment>
+          ) : null}
           <ComposerBannerStack
             key={activeThreadId}
             className="relative z-0"
@@ -4320,6 +4344,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     hasSendableContent={composerSendState.hasSendableContent}
                     preserveComposerFocusOnPointerDown={isMobileViewport}
                     showSendWhileRunning={isMobileViewport}
+                    onQueue={
+                      _isServerThread && phase === "running" && activePendingProgress === null
+                        ? () => submitComposer(undefined, "queued")
+                        : undefined
+                    }
                     onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                     onInterrupt={handleInterruptPrimaryAction}
                     onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}

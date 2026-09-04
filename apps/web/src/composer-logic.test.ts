@@ -70,6 +70,29 @@ describe("composerSubmissionIntentForEnter", () => {
       }),
     ).toBe("foreground");
   });
+
+  it("queues Mod+Shift+Enter for a running thread", () => {
+    expect(
+      composerSubmissionIntentForEnter({
+        isMobileViewport: false,
+        shiftKey: true,
+        modifierKey: true,
+        isDraftThread: false,
+        canQueue: true,
+      }),
+    ).toBe("queued");
+  });
+
+  it("keeps Mod+Shift+Enter as a newline when queueing is unavailable", () => {
+    expect(
+      composerSubmissionIntentForEnter({
+        isMobileViewport: false,
+        shiftKey: true,
+        modifierKey: true,
+        isDraftThread: false,
+      }),
+    ).toBeNull();
+  });
 });
 
 describe("detectComposerTrigger", () => {

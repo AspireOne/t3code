@@ -30,6 +30,7 @@ import { forkedThreadTitle } from "./threadFork.ts";
 import { threadHasQueuedTurnStart } from "./ThreadSettlementPolicy.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+const MAX_QUEUED_MESSAGES = 50;
 
 /**
  * Blocked-on-you work derived from the thread's retained activities: an
@@ -90,9 +91,11 @@ function hasOpenBlockingRequest(thread: {
 
 /** Apply the shared shell-level rule to the detailed command read model. */
 function hasQueuedTurnStartForThread(
-  thread: Pick<OrchestrationThread, "messages" | "latestTurn" | "session">,
+  thread: Pick<OrchestrationThread, "messages" | "latestTurn" | "session" | "queuedMessages">,
   now: string,
 ): boolean {
+  if (thread.queuedMessages.length > 0) return true;
+
   let latestUserMessageAt: string | null = null;
   let latestUserMessageAtMs = Number.NEGATIVE_INFINITY;
   for (const message of thread.messages) {
@@ -1025,8 +1028,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { modelSelection: command.modelSelection }
             : {}),
           ...(command.titleSeed !== undefined ? { titleSeed: command.titleSeed } : {}),
-          runtimeMode: targetThread.runtimeMode,
-          interactionMode: targetThread.interactionMode,
+          runtimeMode: command.runtimeMode,
+          interactionMode: command.interactionMode,
           ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
           createdAt: command.createdAt,
         },
@@ -1070,6 +1073,209 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       return [...lifecycleResetEvents, userMessageEvent, turnStartRequestedEvent];
+    }
+
+    case "thread.turn.queue": {
+      const targetThread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (
+        targetThread.session?.status !== "starting" &&
+        targetThread.session?.status !== "running" &&
+        targetThread.queuedMessages.length === 0 &&
+        targetThread.pendingTurnStart === null
+      ) {
+        // The caller may have observed a running session just as the current
+        // turn completed. Treat that race as an immediate send; otherwise a
+        // valid user message could be rejected after the agent is already
+        // idle.
+        return yield* decideOrchestrationCommand({
+          command: {
+            type: "thread.turn.start",
+            commandId: command.commandId,
+            threadId: command.threadId,
+            message: command.message,
+            ...(command.modelSelection !== undefined
+              ? { modelSelection: command.modelSelection }
+              : {}),
+            runtimeMode: command.runtimeMode,
+            interactionMode: command.interactionMode,
+            ...(command.sourceProposedPlan !== undefined
+              ? { sourceProposedPlan: command.sourceProposedPlan }
+              : {}),
+            createdAt: command.createdAt,
+          },
+          readModel,
+        });
+      }
+      if (targetThread.queuedMessages.length >= MAX_QUEUED_MESSAGES) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `A thread can have at most ${MAX_QUEUED_MESSAGES} queued messages.`,
+        });
+      }
+
+      const sourceProposedPlan = command.sourceProposedPlan;
+      if (sourceProposedPlan) {
+        const sourceThread = yield* requireThread({
+          readModel,
+          command,
+          threadId: sourceProposedPlan.threadId,
+        });
+        const sourcePlan = sourceThread.proposedPlans.find(
+          (entry) => entry.id === sourceProposedPlan.planId,
+        );
+        if (!sourcePlan) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Proposed plan '${sourceProposedPlan.planId}' does not exist on thread '${sourceProposedPlan.threadId}'.`,
+          });
+        }
+        if (sourceThread.projectId !== targetThread.projectId) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Proposed plan '${sourceProposedPlan.planId}' belongs to thread '${sourceThread.id}' in a different project.`,
+          });
+        }
+      }
+
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.message-queued",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.message.messageId,
+          text: command.message.text,
+          attachments: command.message.attachments,
+          ...(command.modelSelection !== undefined
+            ? { modelSelection: command.modelSelection }
+            : {}),
+          runtimeMode: command.runtimeMode,
+          interactionMode: command.interactionMode,
+          ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
+          ...(command.composerState !== undefined ? { composerState: command.composerState } : {}),
+          queuedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.queue.remove": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (!thread.queuedMessages.some((message) => message.messageId === command.messageId)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Queued message '${command.messageId}' does not exist on thread '${command.threadId}'.`,
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.queued-message-removed",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          reason: "user" as const,
+          removedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.queue.drain": {
+      const targetThread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const queuedMessage = targetThread.queuedMessages[0];
+      if (!queuedMessage) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' has no queued messages to drain.`,
+        });
+      }
+      if (
+        targetThread.pendingTurnStart !== null ||
+        targetThread.session?.status === "starting" ||
+        targetThread.session?.status === "running"
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' is already starting or running.`,
+        });
+      }
+
+      const sourceProposedPlan = queuedMessage.sourceProposedPlan;
+      let validSourceProposedPlan = sourceProposedPlan;
+      if (sourceProposedPlan) {
+        const sourceThread = readModel.threads.find(
+          (thread) => thread.id === sourceProposedPlan.threadId,
+        );
+        const sourcePlan = sourceThread?.proposedPlans.find(
+          (entry) => entry.id === sourceProposedPlan.planId,
+        );
+        if (!sourceThread || !sourcePlan || sourceThread.projectId !== targetThread.projectId) {
+          // A plan may have been removed or its source thread archived since
+          // the follow-up was queued. The message is still valid; only the
+          // stale plan context is discarded.
+          validSourceProposedPlan = undefined;
+        }
+      }
+
+      const turnStartResult = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.turn.start",
+          commandId: command.commandId,
+          threadId: command.threadId,
+          message: {
+            messageId: queuedMessage.messageId,
+            role: "user",
+            text: queuedMessage.text,
+            attachments: queuedMessage.attachments,
+          },
+          ...(queuedMessage.modelSelection !== undefined
+            ? { modelSelection: queuedMessage.modelSelection }
+            : {}),
+          runtimeMode: queuedMessage.runtimeMode,
+          interactionMode: queuedMessage.interactionMode,
+          ...(validSourceProposedPlan !== undefined
+            ? { sourceProposedPlan: validSourceProposedPlan }
+            : {}),
+          createdAt: command.createdAt,
+        },
+        readModel,
+      });
+      const turnStartEvents = Array.isArray(turnStartResult) ? turnStartResult : [turnStartResult];
+      const removedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.queued-message-removed",
+        payload: {
+          threadId: command.threadId,
+          messageId: queuedMessage.messageId,
+          reason: "dispatched",
+          removedAt: command.createdAt,
+        },
+      };
+      return [removedEvent, ...turnStartEvents];
     }
 
     case "thread.turn.interrupt": {

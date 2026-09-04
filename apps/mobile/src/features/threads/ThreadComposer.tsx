@@ -3,6 +3,7 @@ import type {
   EnvironmentId,
   MessageId,
   ModelSelection,
+  OrchestrationQueuedMessage,
   OrchestrationThreadShell,
   ProviderInteractionMode,
   RuntimeMode,
@@ -49,6 +50,7 @@ import {
 } from "../../components/ComposerAttachmentStrip";
 import { VideoPreviewModal, type VideoPreviewSource } from "../../components/VideoPreviewModal";
 import { GlassSurface } from "../../components/GlassSurface";
+import { SymbolView } from "../../components/AppSymbol";
 import { ComposerEditor, type ComposerEditorHandle } from "../../components/ComposerEditor";
 import {
   ComposerActionButton,
@@ -113,6 +115,7 @@ export interface ThreadComposerProps {
    */
   readonly threadSyncPhase?: "loading" | "syncing" | null;
   readonly selectedThread: OrchestrationThreadShell;
+  readonly queuedMessages: ReadonlyArray<OrchestrationQueuedMessage>;
   readonly serverConfig: T3ServerConfig | null;
   readonly queueCount: number;
   readonly environmentId: EnvironmentId;
@@ -125,6 +128,9 @@ export interface ThreadComposerProps {
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
   readonly onSendMessage: () => Promise<MessageId | null>;
+  readonly onQueueMessage: () => Promise<MessageId | null>;
+  readonly onMoveQueuedMessage: (message: OrchestrationQueuedMessage) => Promise<void>;
+  readonly onRemoveQueuedMessage: (messageId: MessageId) => Promise<void>;
   readonly onUpdateModelSelection: (modelSelection: ModelSelection) => void;
   readonly onUpdateRuntimeMode: (runtimeMode: RuntimeMode) => void;
   readonly onUpdateInteractionMode: (interactionMode: ProviderInteractionMode) => void;
@@ -299,6 +305,117 @@ const ComposerConnectionStatusPill = memo(function ComposerConnectionStatusPill(
   );
 });
 
+const QueuedMessageList = memo(function QueuedMessageList(props: {
+  readonly messages: ReadonlyArray<OrchestrationQueuedMessage>;
+  readonly disabled?: boolean;
+  readonly onMoveToInput: (message: OrchestrationQueuedMessage) => Promise<void>;
+  readonly onRemove: (messageId: MessageId) => Promise<void>;
+}) {
+  const [busyMessageId, setBusyMessageId] = useState<MessageId | null>(null);
+  const run = useCallback(
+    async (messageId: MessageId, action: () => Promise<void>) => {
+      if (props.disabled || busyMessageId !== null) {
+        return;
+      }
+      setBusyMessageId(messageId);
+      try {
+        await action();
+      } finally {
+        setBusyMessageId(null);
+      }
+    },
+    [busyMessageId, props.disabled],
+  );
+
+  return (
+    <Animated.View
+      className="mb-2 gap-1.5"
+      entering={FadeInDown.duration(180)}
+      exiting={FadeOut.duration(120)}
+      layout={COMPOSER_LAYOUT_TRANSITION}
+    >
+      <View className="flex-row items-center gap-1.5 px-2">
+        <SymbolView
+          name="clock"
+          size={14}
+          tintColorClassName="accent-icon-muted"
+          type="monochrome"
+        />
+        <Text className="text-xs font-t3-medium text-foreground-muted">
+          {props.messages.length} queued message{props.messages.length === 1 ? "" : "s"}
+        </Text>
+      </View>
+      {props.messages.map((message, index) => {
+        const isBusy = busyMessageId === message.messageId;
+        const attachmentLabel =
+          message.attachments.length === 0
+            ? ""
+            : ` · ${message.attachments.length} attachment${message.attachments.length === 1 ? "" : "s"}`;
+        const composerState = message.composerState;
+        const contextCount = composerState
+          ? composerState.terminalContexts.length +
+            composerState.elementContexts.length +
+            composerState.previewAnnotations.length +
+            composerState.reviewComments.length
+          : 0;
+        const label = composerState
+          ? composerState.previewText.trim() ||
+            (contextCount > 0
+              ? `${contextCount} attached context${contextCount === 1 ? "" : "s"}`
+              : `Attachment${message.attachments.length === 1 ? "" : "s"}`)
+          : message.text.trim() || `Attachment${message.attachments.length === 1 ? "" : "s"}`;
+        return (
+          <View
+            key={message.messageId}
+            className="min-h-[44px] flex-row items-center gap-1 rounded-xl border border-border/70 bg-subtle/70 px-2"
+          >
+            <View className="min-w-0 flex-1 py-1.5 pl-1">
+              <Text className="text-sm text-foreground" numberOfLines={2}>
+                {label}
+                <Text className="text-foreground-muted">{attachmentLabel}</Text>
+              </Text>
+            </View>
+            <Pressable
+              accessibilityLabel={`Move queued message ${index + 1} to input`}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: props.disabled || busyMessageId !== null }}
+              className="size-9 items-center justify-center rounded-lg active:bg-subtle-strong"
+              disabled={props.disabled || busyMessageId !== null}
+              onPress={() => void run(message.messageId, () => props.onMoveToInput(message))}
+            >
+              {isBusy ? (
+                <ActivityIndicator size="small" colorClassName="accent-icon-muted" />
+              ) : (
+                <SymbolView
+                  name="arrow.turn.left.up"
+                  size={16}
+                  tintColorClassName="accent-icon-muted"
+                  type="monochrome"
+                />
+              )}
+            </Pressable>
+            <Pressable
+              accessibilityLabel={`Remove queued message ${index + 1}`}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: props.disabled || busyMessageId !== null }}
+              className="size-9 items-center justify-center rounded-lg active:bg-subtle-strong"
+              disabled={props.disabled || busyMessageId !== null}
+              onPress={() => void run(message.messageId, () => props.onRemove(message.messageId))}
+            >
+              <SymbolView
+                name="trash"
+                size={16}
+                tintColorClassName="accent-icon-muted"
+                type="monochrome"
+              />
+            </Pressable>
+          </View>
+        );
+      })}
+    </Animated.View>
+  );
+});
+
 export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposerProps) {
   const navigation = useNavigation();
   const foregroundColor = useUniwindTheme()["--color-foreground"];
@@ -379,6 +496,10 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     states: uploadStates,
   });
   const canSend = hasContent && !voiceInput.blocksSubmission && attachmentBlockReason === null;
+  const showQueueAction =
+    hasContent &&
+    props.selectedThread.session?.status === "running" &&
+    !voiceInput.blocksSubmission;
 
   // Keep the feed inset aligned with the card or compact dictation strip.
   useEffect(() => {
@@ -427,7 +548,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     }
     onEditorFocusChange?.(false);
   }, [onEditorFocusChange, onExpandedChange, settingsSheetPresentation.isActive]);
-  const { onSendMessage } = props;
+  const { onSendMessage, onQueueMessage } = props;
 
   const handleSend = useCallback(async () => {
     if (voiceInput.blocksSubmission) return;
@@ -459,6 +580,18 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     props.selectedThread.title,
     voiceInput.blocksSubmission,
   ]);
+
+  const handleQueue = useCallback(async () => {
+    if (voiceInput.blocksSubmission) return;
+    const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
+    if (inFlightThreadIdsRef.current.has(threadKey)) return;
+    inFlightThreadIdsRef.current.add(threadKey);
+    try {
+      await onQueueMessage();
+    } finally {
+      inFlightThreadIdsRef.current.delete(threadKey);
+    }
+  }, [onQueueMessage, props.environmentId, props.selectedThread.id, voiceInput.blocksSubmission]);
 
   // ── Model menu ───────────────────────────────────────────
   const modelOptions = useMemo(
@@ -590,6 +723,15 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           />
         ) : null}
 
+        {props.queuedMessages.length > 0 ? (
+          <QueuedMessageList
+            messages={props.queuedMessages}
+            disabled={props.connectionState !== "connected"}
+            onMoveToInput={props.onMoveQueuedMessage}
+            onRemove={props.onRemoveQueuedMessage}
+          />
+        ) : null}
+
         <ComposerSurface
           style={
             isExpanded
@@ -717,13 +859,24 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     onPress={props.onStopThread}
                   />
                 ) : (
-                  <ComposerActionButton
-                    accessibilityLabel={attachmentBlockReason ?? sendLabel}
-                    icon="arrow.up"
-                    variant="primary"
-                    disabled={!canSend}
-                    onPress={handleSend}
-                  />
+                  <View className="flex-row items-center">
+                    {showQueueAction ? (
+                      <ComposerActionButton
+                        accessibilityLabel="Queue message"
+                        icon="clock"
+                        variant="secondary"
+                        disabled={!canSend}
+                        onPress={handleQueue}
+                      />
+                    ) : null}
+                    <ComposerActionButton
+                      accessibilityLabel={attachmentBlockReason ?? sendLabel}
+                      icon="arrow.up"
+                      variant="primary"
+                      disabled={!canSend}
+                      onPress={handleSend}
+                    />
+                  </View>
                 )}
               </View>
             ) : null}
@@ -808,13 +961,24 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                       onPress={props.onStopThread}
                     />
                   ) : voicePresentation.showsSend ? (
-                    <ComposerActionButton
-                      accessibilityLabel={attachmentBlockReason ?? sendLabel}
-                      icon="arrow.up"
-                      variant="primary"
-                      disabled={!canSend}
-                      onPress={handleSend}
-                    />
+                    <View className="flex-row items-center">
+                      {showQueueAction ? (
+                        <ComposerActionButton
+                          accessibilityLabel="Queue message"
+                          icon="clock"
+                          variant="secondary"
+                          disabled={!canSend}
+                          onPress={handleQueue}
+                        />
+                      ) : null}
+                      <ComposerActionButton
+                        accessibilityLabel={attachmentBlockReason ?? sendLabel}
+                        icon="arrow.up"
+                        variant="primary"
+                        disabled={!canSend}
+                        onPress={handleSend}
+                      />
+                    </View>
                   ) : null}
                 </View>
               </ComposerToolbarRow>
@@ -822,11 +986,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           </Animated.View>
         </ComposerSurface>
 
-        {/* Queue count */}
+        {/* Local outbox count: these messages are waiting for a connection or
+            a thread shell, rather than the server-side in-turn queue above. */}
         {props.queueCount > 0 ? (
           <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(120)}>
             <Text className="pt-2 text-xs text-foreground-muted">
-              {props.queueCount} queued message{props.queueCount === 1 ? "" : "s"} will send
+              {props.queueCount} pending message{props.queueCount === 1 ? "" : "s"} will send
               automatically.
             </Text>
           </Animated.View>

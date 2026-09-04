@@ -1,7 +1,7 @@
 import { memo, type PointerEventHandler } from "react";
-import { ChevronDownIcon, ChevronLeftIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronLeftIcon, ListEndIcon } from "lucide-react";
 import { useEnvironmentIdentificationMode } from "~/hooks/useSettings";
-import { cn } from "~/lib/utils";
+import { cn, isMacPlatform } from "~/lib/utils";
 import { StageBackdropButtonArt, useSidebarStageBackdropVariant } from "../SidebarStageBackdrop";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
@@ -31,6 +31,8 @@ interface ComposerPrimaryActionsProps {
   /** Enter-to-send is disabled on mobile viewports, where stop would otherwise
    * be the only primary action and a running turn could not be steered. */
   showSendWhileRunning?: boolean;
+  /** Adds a follow-up to the server-side queue without interrupting the turn. */
+  onQueue?: (() => void) | undefined;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
@@ -72,6 +74,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   hasSendableContent,
   preserveComposerFocusOnPointerDown = false,
   showSendWhileRunning = false,
+  onQueue,
   onPreviousPendingQuestion,
   onInterrupt,
   onImplementPlanInNewThread,
@@ -81,6 +84,14 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     : undefined;
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const isSendDisabled = sendDisabledReason !== null;
+  const queueShortcutLabel =
+    typeof navigator !== "undefined" && isMacPlatform(navigator.platform)
+      ? "⌘⇧Enter"
+      : "Ctrl+Shift+Enter";
+  const queueShortcut =
+    typeof navigator !== "undefined" && isMacPlatform(navigator.platform)
+      ? "Meta+Shift+Enter"
+      : "Control+Shift+Enter";
   const stageBackdropVariant = useSidebarStageBackdropVariant(
     environmentIdentificationMode === "artwork",
   );
@@ -270,6 +281,29 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     </button>
   );
 
+  const queueButton = onQueue ? (
+    <Button
+      type="button"
+      size="icon-sm"
+      variant="ghost"
+      className="rounded-full text-muted-foreground hover:text-foreground"
+      {...pointerFocusProps}
+      disabled={
+        isSendBusy ||
+        isSendDisabled ||
+        isConnecting ||
+        isEnvironmentUnavailable ||
+        !hasSendableContent
+      }
+      aria-label="Queue message"
+      aria-keyshortcuts={queueShortcut}
+      title={`Queue message (${queueShortcutLabel})`}
+      onClick={onQueue}
+    >
+      <ListEndIcon className="size-4" />
+    </Button>
+  ) : null;
+
   if (!isRunning) {
     return sendButton;
   }
@@ -277,6 +311,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   return (
     <>
       {renderStopGenerationButton(false)}
+      {hasSendableContent ? queueButton : null}
       {showSendWhileRunning && hasSendableContent ? sendButton : null}
     </>
   );

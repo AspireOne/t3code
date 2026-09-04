@@ -39,6 +39,8 @@ const baseThread: OrchestrationThread = {
   settledAt: null,
   deletedAt: null,
   messages: [],
+  queuedMessages: [],
+  pendingTurnStart: null,
   proposedPlans: [],
   activities: [],
   checkpoints: [],
@@ -120,6 +122,77 @@ describe("applyThreadDetailEvent", () => {
         },
       });
       expect(result.kind).toBe("deleted");
+    });
+  });
+
+  describe("queued messages", () => {
+    const queuedPayload = {
+      threadId: ThreadId.make("thread-1"),
+      messageId: MessageId.make("queued-1"),
+      text: "Queued follow-up",
+      attachments: [],
+      runtimeMode: "full-access" as const,
+      interactionMode: "default" as const,
+      queuedAt: "2026-04-01T02:00:00.000Z",
+    };
+
+    it("adds queued messages and keeps the latest payload per message id", () => {
+      const queued = applyThreadDetailEvent(baseThread, {
+        ...baseEventFields,
+        sequence: 3,
+        occurredAt: queuedPayload.queuedAt,
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.message-queued",
+        payload: queuedPayload,
+      });
+      expect(queued.kind).toBe("updated");
+      if (queued.kind !== "updated") return;
+
+      const replaced = applyThreadDetailEvent(queued.thread, {
+        ...baseEventFields,
+        sequence: 4,
+        occurredAt: "2026-04-01T02:01:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.message-queued",
+        payload: { ...queuedPayload, text: "Updated follow-up" },
+      });
+      expect(replaced.kind).toBe("updated");
+      if (replaced.kind !== "updated") return;
+      expect(replaced.thread.queuedMessages).toHaveLength(1);
+      expect(replaced.thread.queuedMessages[0]?.text).toBe("Updated follow-up");
+    });
+
+    it("removes only the acknowledged queued message", () => {
+      const result = applyThreadDetailEvent(
+        {
+          ...baseThread,
+          queuedMessages: [
+            queuedPayload,
+            { ...queuedPayload, messageId: MessageId.make("queued-2") },
+          ],
+        },
+        {
+          ...baseEventFields,
+          sequence: 5,
+          occurredAt: "2026-04-01T02:02:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.queued-message-removed",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            messageId: MessageId.make("queued-1"),
+            reason: "user",
+            removedAt: "2026-04-01T02:02:00.000Z",
+          },
+        },
+      );
+      expect(result.kind).toBe("updated");
+      if (result.kind !== "updated") return;
+      expect(result.thread.queuedMessages.map((message) => message.messageId)).toEqual([
+        MessageId.make("queued-2"),
+      ]);
     });
   });
 

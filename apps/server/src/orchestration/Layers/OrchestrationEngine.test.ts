@@ -161,6 +161,8 @@ describe("OrchestrationEngine", () => {
           settledAt: null,
           deletedAt: null,
           messages: [],
+          queuedMessages: [],
+          pendingTurnStart: null,
           proposedPlans: [],
           activities: [],
           checkpoints: [],
@@ -173,6 +175,8 @@ describe("OrchestrationEngine", () => {
       threads: projectionSnapshot.threads.map((thread) => ({
         ...thread,
         messages: [],
+        queuedMessages: [],
+        pendingTurnStart: null,
         proposedPlans: [],
         activities: [],
         checkpoints: [],

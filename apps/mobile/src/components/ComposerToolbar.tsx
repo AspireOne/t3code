@@ -222,7 +222,7 @@ export function ComposerActionButton(props: {
   readonly disabled?: boolean;
   readonly icon: ComponentProps<typeof SymbolView>["name"];
   readonly onPress: () => void;
-  readonly variant?: "primary" | "danger";
+  readonly variant?: "primary" | "danger" | "secondary";
 }) {
   return (
     <Pressable
@@ -238,9 +238,13 @@ export function ComposerActionButton(props: {
           "size-[30px] items-center justify-center rounded-full",
           props.variant === "danger"
             ? "bg-danger"
-            : props.disabled
-              ? "bg-primary/15"
-              : "bg-primary",
+            : props.variant === "secondary"
+              ? props.disabled
+                ? "bg-subtle"
+                : "bg-subtle-strong"
+              : props.disabled
+                ? "bg-primary/15"
+                : "bg-primary",
         )}
       >
         <SymbolView
@@ -248,7 +252,11 @@ export function ComposerActionButton(props: {
           size={16}
           weight="semibold"
           tintColorClassName={
-            props.variant === "danger" ? "accent-danger-foreground" : "accent-primary-foreground"
+            props.variant === "danger"
+              ? "accent-danger-foreground"
+              : props.variant === "secondary"
+                ? "accent-icon-muted"
+                : "accent-primary-foreground"
           }
           type="monochrome"
         />

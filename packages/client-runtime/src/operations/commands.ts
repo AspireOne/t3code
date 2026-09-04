@@ -47,6 +47,8 @@ export type UpdateThreadMetadataInput = CommandInput<"thread.meta.update">;
 export type SetThreadRuntimeModeInput = CommandInput<"thread.runtime-mode.set">;
 export type SetThreadInteractionModeInput = CommandInput<"thread.interaction-mode.set">;
 export type StartThreadTurnInput = CommandInput<"thread.turn.start">;
+export type QueueThreadTurnInput = CommandInput<"thread.turn.queue">;
+export type RemoveQueuedMessageInput = CommandInput<"thread.queue.remove">;
 export type InterruptThreadTurnInput = CommandInput<"thread.turn.interrupt">;
 export type CompactThreadInput = CommandInput<"thread.compact">;
 export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond">;
@@ -284,6 +286,30 @@ export const startThreadTurn: (input: StartThreadTurnInput) => CommandEffect = E
   return yield* dispatch({
     ...input,
     type: "thread.turn.start",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const queueThreadTurn: (input: QueueThreadTurnInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.queueThreadTurn",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.turn.queue",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const removeQueuedMessage: (input: RemoveQueuedMessageInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.removeQueuedMessage",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.queue.remove",
     commandId: metadata.commandId,
     createdAt: metadata.createdAt,
   });

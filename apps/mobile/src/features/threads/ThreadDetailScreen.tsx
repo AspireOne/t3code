@@ -12,6 +12,7 @@ import type {
   EnvironmentId,
   MessageId,
   ModelSelection,
+  OrchestrationQueuedMessage,
   OrchestrationThreadShell,
   ProviderApprovalDecision,
   ProviderInteractionMode,
@@ -115,6 +116,7 @@ export interface ThreadDetailScreenProps {
   readonly projectWorkspaceRoot: string | null;
   readonly threadCwd: string | null;
   readonly selectedThreadQueueCount: number;
+  readonly queuedMessages: ReadonlyArray<OrchestrationQueuedMessage>;
   readonly serverConfig: T3ServerConfig | null;
   readonly layoutVariant?: LayoutVariant;
   readonly usesAutomaticContentInsets?: boolean;
@@ -127,6 +129,9 @@ export interface ThreadDetailScreenProps {
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
   readonly onSendMessage: () => Promise<MessageId | null>;
+  readonly onQueueMessage: () => Promise<MessageId | null>;
+  readonly onMoveQueuedMessage: (message: OrchestrationQueuedMessage) => Promise<void>;
+  readonly onRemoveQueuedMessage: (messageId: MessageId) => Promise<void>;
   readonly onReconnectEnvironment: () => void;
   readonly onUpdateThreadModelSelection: (modelSelection: ModelSelection) => void;
   readonly onUpdateThreadRuntimeMode: (runtimeMode: RuntimeMode) => void;
@@ -806,6 +811,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   environmentLabel={props.environmentLabel}
                   threadSyncPhase={threadSyncPhase}
                   selectedThread={props.selectedThread}
+                  queuedMessages={props.queuedMessages}
                   serverConfig={props.serverConfig}
                   queueCount={props.selectedThreadQueueCount}
                   environmentId={props.environmentId}
@@ -818,6 +824,9 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   onRemoveDraftImage={props.onRemoveDraftImage}
                   onStopThread={props.onStopThread}
                   onSendMessage={handleSendMessage}
+                  onQueueMessage={props.onQueueMessage}
+                  onMoveQueuedMessage={props.onMoveQueuedMessage}
+                  onRemoveQueuedMessage={props.onRemoveQueuedMessage}
                   onReconnectEnvironment={props.onReconnectEnvironment}
                   onUpdateModelSelection={props.onUpdateThreadModelSelection}
                   onUpdateRuntimeMode={props.onUpdateThreadRuntimeMode}

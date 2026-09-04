@@ -112,3 +112,8 @@ On desktop, press `Cmd+Enter` on macOS or `Ctrl+Enter` on Windows and Linux from
 start it in the background. T3 Code opens another new thread and shows an **Open** action for the
 thread that started. The new thread keeps the selected workspace mode and base branch. If **New
 worktree** is selected, each background thread creates its own worktree.
+
+While an agent is working, use `Cmd+Shift+Enter` on macOS or `Ctrl+Shift+Enter` on Windows and
+Linux, or select the queue button, to hold a follow-up message until the current turn finishes
+naturally. Queued messages appear above the composer in order. You can queue multiple messages,
+remove one, or move it back to the input. On mobile, use the queue action in the composer.

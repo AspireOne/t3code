@@ -280,6 +280,8 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     interactionMode: "default",
     session: null,
     messages: [],
+    queuedMessages: [],
+    pendingTurnStart: null,
     proposedPlans: [],
     activities: [],
     checkpoints: [],
@@ -868,6 +870,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         phase: "ready",
         latestTurn: completedTurn,
         latestUserMessageId: localDispatch.latestUserMessageId,
+        projectedMessageIds: new Set(),
         session: readySession,
         hasPendingApproval: false,
         hasPendingUserInput: false,
@@ -887,6 +890,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         phase: "connecting",
         latestTurn: completedTurn,
         latestUserMessageId: MessageId.make("message-followup"),
+        projectedMessageIds: new Set(),
         session: {
           ...readySession,
           status: "starting",
@@ -917,6 +921,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         phase: "ready",
         latestTurn: newerTurn,
         latestUserMessageId: localDispatch.latestUserMessageId,
+        projectedMessageIds: new Set(),
         session: { ...readySession, updatedAt: newerTurn.completedAt },
         hasPendingApproval: false,
         hasPendingUserInput: false,
@@ -944,6 +949,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         phase: "running",
         latestTurn: runningTurn,
         latestUserMessageId: localDispatch.latestUserMessageId,
+        projectedMessageIds: new Set(),
         session: {
           ...readySession,
           status: "running",
@@ -960,6 +966,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         phase: "running",
         latestTurn: runningTurn,
         latestUserMessageId: localDispatch.latestUserMessageId,
+        projectedMessageIds: new Set(),
         session: {
           ...readySession,
           status: "running",
@@ -1007,7 +1014,27 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         phase: "running",
         latestTurn: runningTurn,
         latestUserMessageId: MessageId.make("message-steer"),
+        projectedMessageIds: new Set(),
         session: runningSession,
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("acknowledges a queued message by its projected id", () => {
+    const messageId = MessageId.make("message-queued");
+    const localDispatch = createLocalDispatchSnapshot(makeThread(), { messageId });
+
+    expect(
+      hasServerAcknowledgedLocalDispatch({
+        localDispatch,
+        phase: "running",
+        latestTurn: null,
+        latestUserMessageId: null,
+        projectedMessageIds: new Set([messageId]),
+        session: null,
         hasPendingApproval: false,
         hasPendingUserInput: false,
         threadError: null,
@@ -1022,6 +1049,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
       phase: "ready" as const,
       latestTurn: null,
       latestUserMessageId: localDispatch.latestUserMessageId,
+      projectedMessageIds: new Set<string>(),
       session: null,
       hasPendingApproval: false,
       hasPendingUserInput: false,

@@ -498,6 +498,7 @@ async function preserveUploadedAttachmentsForEditor(
 
 export function useThreadOutboxDrain(): void {
   const startTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
+  const queueTurn = useAtomCommand(threadEnvironment.queueTurn, { reportFailure: false });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -715,7 +716,8 @@ export function useThreadOutboxDrain(): void {
       if (!isQueuedMessagePayloadCurrent(persistedMessage, deliveryRevision)) {
         return true;
       }
-      const deliveryResult = await startTurn({
+      const deliverTurn = queuedMessage.deliveryMode === "queue" ? queueTurn : startTurn;
+      const deliveryResult = await deliverTurn({
         environmentId: queuedMessage.environmentId,
         input: {
           commandId: queuedMessage.commandId,
@@ -757,6 +759,7 @@ export function useThreadOutboxDrain(): void {
       makeDeliveryHelpers,
       setThreadInteractionMode,
       setThreadRuntimeMode,
+      queueTurn,
       startTurn,
       updateThreadMetadata,
       restoreQueuedMessage,

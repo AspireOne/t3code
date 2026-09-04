@@ -63,6 +63,8 @@ function makeSource(overrides: Partial<OrchestrationThread> = {}): Orchestration
         updatedAt: NOW,
       },
     ],
+    queuedMessages: [],
+    pendingTurnStart: null,
     proposedPlans: [],
     activities: [
       {

@@ -20,6 +20,8 @@ import {
   ThreadForkedPayload,
   ThreadDeletedPayload,
   ThreadInteractionModeSetPayload,
+  ThreadMessageQueuedPayload,
+  ThreadQueuedMessageRemovedPayload,
   ThreadMetaUpdatedPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadRuntimeModeSetPayload,
@@ -33,6 +35,7 @@ import {
   ThreadUnsnoozedPayload,
   ThreadRevertedPayload,
   ThreadSessionSetPayload,
+  ThreadTurnStartRequestedPayload,
   ThreadTurnDiffCompletedPayload,
 } from "./Schemas.ts";
 import { cloneThreadForFork } from "./threadFork.ts";
@@ -312,6 +315,8 @@ export function projectEvent(
             messages: [],
             activities: [],
             checkpoints: [],
+            queuedMessages: [],
+            pendingTurnStart: null,
             session: null,
           },
           event.type,
@@ -351,6 +356,8 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             deletedAt: payload.deletedAt,
+            queuedMessages: [],
+            pendingTurnStart: null,
             updatedAt: payload.deletedAt,
           }),
         })),
@@ -524,6 +531,61 @@ export function projectEvent(
         })),
       );
 
+    case "thread.message-queued":
+      return decodeForEvent(ThreadMessageQueuedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) return nextBase;
+          const queuedMessage = {
+            messageId: payload.messageId,
+            text: payload.text,
+            attachments: payload.attachments,
+            ...(payload.modelSelection !== undefined
+              ? { modelSelection: payload.modelSelection }
+              : {}),
+            runtimeMode: payload.runtimeMode,
+            interactionMode: payload.interactionMode,
+            ...(payload.sourceProposedPlan !== undefined
+              ? { sourceProposedPlan: payload.sourceProposedPlan }
+              : {}),
+            ...(payload.composerState !== undefined
+              ? { composerState: payload.composerState }
+              : {}),
+            queuedAt: payload.queuedAt,
+          };
+          const queuedMessages = [
+            ...thread.queuedMessages.filter((entry) => entry.messageId !== payload.messageId),
+            queuedMessage,
+          ];
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              queuedMessages,
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.queued-message-removed":
+      return decodeForEvent(
+        ThreadQueuedMessageRemovedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            queuedMessages:
+              nextBase.threads
+                .find((entry) => entry.id === payload.threadId)
+                ?.queuedMessages.filter((entry) => entry.messageId !== payload.messageId) ?? [],
+            updatedAt: event.occurredAt,
+          }),
+        })),
+      );
+
     case "thread.message-sent":
       return Effect.gen(function* () {
         const payload = yield* decodeForEvent(
@@ -612,6 +674,12 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             session,
+            pendingTurnStart:
+              session.status === "running" && session.activeTurnId !== null
+                ? null
+                : settledTurnState !== null
+                  ? null
+                  : thread.pendingTurnStart,
             latestTurn:
               session.status === "running" && session.activeTurnId !== null
                 ? {
@@ -647,6 +715,25 @@ export function projectEvent(
           }),
         };
       });
+
+    case "thread.turn-start-requested":
+      return decodeForEvent(
+        ThreadTurnStartRequestedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            pendingTurnStart: {
+              messageId: payload.messageId,
+              requestedAt: payload.createdAt,
+            },
+            updatedAt: event.occurredAt,
+          }),
+        })),
+      );
 
     case "thread.proposed-plan-upserted":
       return Effect.gen(function* () {

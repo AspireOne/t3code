@@ -15,7 +15,7 @@ export function isStandaloneCompactCommand(text: string): boolean {
 export function composerThreadActionCommandReplacement(command: "compact" | "fork"): string {
   return `/${command} `;
 }
-export type ComposerSubmissionIntent = "foreground" | "background";
+export type ComposerSubmissionIntent = "foreground" | "background" | "queued";
 
 export interface ComposerTrigger {
   kind: ComposerTriggerKind;
@@ -29,8 +29,15 @@ export function composerSubmissionIntentForEnter(input: {
   shiftKey: boolean;
   modifierKey: boolean;
   isDraftThread: boolean;
+  canQueue?: boolean;
 }): ComposerSubmissionIntent | null {
-  if (input.isMobileViewport || input.shiftKey) {
+  if (input.isMobileViewport) {
+    return null;
+  }
+  if (input.modifierKey && input.shiftKey) {
+    return input.canQueue ? "queued" : null;
+  }
+  if (input.shiftKey) {
     return null;
   }
   return input.modifierKey && input.isDraftThread ? "background" : "foreground";

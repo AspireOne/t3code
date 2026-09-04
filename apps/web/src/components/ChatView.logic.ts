@@ -189,6 +189,8 @@ export function buildLocalDraftThread(
     interactionMode: draftThread.interactionMode,
     session: null,
     messages: [],
+    queuedMessages: [],
+    pendingTurnStart: null,
     createdAt: draftThread.createdAt,
     updatedAt: draftThread.createdAt,
     archivedAt: null,
@@ -208,6 +210,8 @@ export function buildLoadingThreadFromShell(shell: ThreadShell): Thread {
   return {
     ...shell,
     messages: [],
+    queuedMessages: [],
+    pendingTurnStart: null,
     proposedPlans: [],
     activities: [],
     checkpoints: [],
@@ -637,6 +641,7 @@ export interface LocalDispatchSnapshot {
   startedAt: string;
   preparingWorktree: boolean;
   submissionIntent: ComposerSubmissionIntent;
+  expectedMessageId: ChatMessage["id"] | null;
   latestUserMessageId: ChatMessage["id"] | null;
   latestTurnTurnId: TurnId | null;
   latestTurnRequestedAt: string | null;
@@ -651,6 +656,7 @@ export function createLocalDispatchSnapshot(
   options?: {
     preparingWorktree?: boolean;
     submissionIntent?: ComposerSubmissionIntent;
+    messageId?: ChatMessage["id"];
   },
 ): LocalDispatchSnapshot {
   const latestTurn = activeThread?.latestTurn ?? null;
@@ -660,6 +666,7 @@ export function createLocalDispatchSnapshot(
     startedAt: new Date().toISOString(),
     preparingWorktree: Boolean(options?.preparingWorktree),
     submissionIntent: options?.submissionIntent ?? "foreground",
+    expectedMessageId: options?.messageId ?? null,
     latestUserMessageId: latestUserMessage?.id ?? null,
     latestTurnTurnId: latestTurn?.turnId ?? null,
     latestTurnRequestedAt: latestTurn?.requestedAt ?? null,
@@ -675,6 +682,7 @@ export function hasServerAcknowledgedLocalDispatch(input: {
   phase: SessionPhase;
   latestTurn: Thread["latestTurn"] | null;
   latestUserMessageId: ChatMessage["id"] | null;
+  projectedMessageIds: ReadonlySet<string>;
   session: Thread["session"] | null;
   hasPendingApproval: boolean;
   hasPendingUserInput: boolean;
@@ -686,12 +694,10 @@ export function hasServerAcknowledgedLocalDispatch(input: {
   if (input.hasPendingApproval || input.hasPendingUserInput || Boolean(input.threadError)) {
     return true;
   }
-  if (input.phase === "connecting") {
-    return false;
-  }
 
   const latestTurn = input.latestTurn ?? null;
   const session = input.session ?? null;
+  const expectedMessageId = input.localDispatch.expectedMessageId;
   const latestUserMessageChanged =
     input.localDispatch.latestUserMessageId !== input.latestUserMessageId;
   const latestTurnChanged =
@@ -700,12 +706,19 @@ export function hasServerAcknowledgedLocalDispatch(input: {
     input.localDispatch.latestTurnStartedAt !== (latestTurn?.startedAt ?? null) ||
     input.localDispatch.latestTurnCompletedAt !== (latestTurn?.completedAt ?? null);
 
+  if (expectedMessageId !== null && input.projectedMessageIds.has(expectedMessageId)) {
+    return true;
+  }
+  if (input.phase === "connecting") {
+    return false;
+  }
+
   if (input.phase === "running") {
     // Steering adds a user message to the current running turn without
     // necessarily changing any of the turn timestamps. Treat that projected
     // message as the server acknowledgment so the composer does not remain
     // stuck in its local "Sending" state until the turn settles.
-    if (latestUserMessageChanged) {
+    if (expectedMessageId === null && latestUserMessageChanged) {
       return true;
     }
     if (!latestTurnChanged) {
