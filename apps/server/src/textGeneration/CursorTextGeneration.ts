@@ -244,6 +244,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
         message: input.message,
         previousTitle: input.previousTitle,
         attachments: input.attachments,
+        policy: input.policy,
       });
 
       const generated = yield* runCursorJson({

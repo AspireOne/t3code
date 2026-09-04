@@ -150,6 +150,7 @@ describe("ProviderCommandReactor", () => {
     readonly requiresNewThreadForModelChange?: boolean;
     readonly titleRegenerationCompletionDispatchFailures?: number;
     readonly titleRegenerationBeforeStart?: "one" | "two";
+    readonly threadTitleInstructions?: string;
     readonly interruptTurnEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
     readonly stopSessionEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
     readonly startSessionEffect?: (
@@ -428,7 +429,11 @@ describe("ProviderCommandReactor", () => {
           generateThreadTitle,
         }),
       ),
-      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        ServerSettingsService.layerTest({
+          threadTitleInstructions: input?.threadTitleInstructions ?? "",
+        }),
+      ),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
     );
@@ -689,7 +694,9 @@ describe("ProviderCommandReactor", () => {
   );
 
   it("retries thread title generation after a transient failure", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({
+      threadTitleInstructions: "Use sentence case for every title.",
+    });
     const now = "2026-01-01T00:00:00.000Z";
     const seededTitle = "Please investigate reconnect failures after restar...";
     let attempts = 0;
@@ -737,6 +744,11 @@ describe("ProviderCommandReactor", () => {
     await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
     expect(harness.generateThreadTitle.mock.calls[0]?.[0]).toMatchObject({
       message: "Please investigate reconnect failures after restarting the session.",
+      policy: {
+        kind: "custom",
+        threadTitleInstructions: "Use sentence case for every title.",
+        inferRepositoryConventions: false,
+      },
     });
 
     await waitFor(async () => {
@@ -753,7 +765,9 @@ describe("ProviderCommandReactor", () => {
   });
 
   it("regenerates a thread title from the current conversation", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({
+      threadTitleInstructions: "Prefer noun phrases over questions.",
+    });
     const now = "2026-01-01T00:00:00.000Z";
     harness.generateThreadTitle.mockReturnValue(
       Effect.succeed({ title: "Resolve stale reconnect state" }),
@@ -824,6 +838,11 @@ describe("ProviderCommandReactor", () => {
         "ASSISTANT:",
         "The remaining issue is stale reconnect state.",
       ].join("\n"),
+      policy: {
+        kind: "custom",
+        threadTitleInstructions: "Prefer noun phrases over questions.",
+        inferRepositoryConventions: false,
+      },
     });
     const readModel = await harness.readModel();
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));

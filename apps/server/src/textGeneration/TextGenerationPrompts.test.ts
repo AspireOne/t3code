@@ -211,6 +211,30 @@ describe("buildThreadTitlePrompt", () => {
     expect(result.prompt).toContain("The remaining issue is stale session state");
   });
 
+  it("appends custom instructions to initial and regenerated title prompts", () => {
+    const instructions = "Use sentence case and mention the user's durable goal.";
+    const initial = buildThreadTitlePrompt({
+      message: "Fix the reconnect flow",
+      policy: {
+        kind: "custom",
+        threadTitleInstructions: instructions,
+        inferRepositoryConventions: false,
+      },
+    });
+    const regenerated = buildThreadTitlePrompt({
+      message: "USER:\nFix the reconnect flow",
+      previousTitle: "Reconnect issue",
+      policy: {
+        kind: "custom",
+        threadTitleInstructions: instructions,
+        inferRepositoryConventions: false,
+      },
+    });
+
+    expect(initial.prompt).toContain(`Additional instructions:\n${instructions}`);
+    expect(regenerated.prompt).toContain(`Additional instructions:\n${instructions}`);
+  });
+
   it("keeps the latest thread contents when regeneration context is truncated", () => {
     const result = buildThreadTitlePrompt({
       message: `${"old context ".repeat(1_000)}\n\nASSISTANT:\nCurrent thread state`,

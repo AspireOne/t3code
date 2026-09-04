@@ -32,6 +32,7 @@ import { increment, orchestrationEventsProcessedTotal } from "../../observabilit
 import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
+import { customTextGenerationPolicy } from "../../textGeneration/TextGenerationPresets.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
@@ -71,6 +72,11 @@ function toNonEmptyProviderInput(value: string | undefined): string | undefined 
   const normalized = value?.trim();
   return normalized && normalized.length > 0 ? normalized : undefined;
 }
+
+const threadTitlePolicyForInstructions = (instructions: string) =>
+  instructions.length > 0
+    ? customTextGenerationPolicy({ threadTitleInstructions: instructions })
+    : undefined;
 
 function mapProviderSessionStatusToOrchestrationStatus(
   status: "connecting" | "ready" | "running" | "error" | "closed",
@@ -910,7 +916,7 @@ const make = Effect.gen(function* () {
     }) {
       const attachments = input.attachments ?? [];
       yield* Effect.gen(function* () {
-        const { textGenerationModelSelection: modelSelection } =
+        const { textGenerationModelSelection: modelSelection, threadTitleInstructions } =
           yield* serverSettingsService.getSettings;
 
         const generated = yield* textGeneration
@@ -918,6 +924,7 @@ const make = Effect.gen(function* () {
             cwd: input.cwd,
             message: input.messageText,
             ...(attachments.length > 0 ? { attachments } : {}),
+            policy: threadTitlePolicyForInstructions(threadTitleInstructions),
             modelSelection,
           })
           .pipe(
@@ -980,13 +987,14 @@ const make = Effect.gen(function* () {
         thread,
         projects: project ? [project] : [],
       }) ?? process.cwd();
-    const { textGenerationModelSelection: modelSelection } =
+    const { textGenerationModelSelection: modelSelection, threadTitleInstructions } =
       yield* serverSettingsService.getSettings;
     const generated = yield* textGeneration.generateThreadTitle({
       cwd,
       message,
       previousTitle,
       ...(attachments.length > 0 ? { attachments } : {}),
+      policy: threadTitlePolicyForInstructions(threadTitleInstructions),
       modelSelection,
     });
     if (generated.title === DEFAULT_THREAD_TITLE || generated.title === previousTitle) {

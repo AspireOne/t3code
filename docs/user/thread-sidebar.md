@@ -47,6 +47,10 @@ To generate a fresh title from the conversation, open a thread's context menu an
 **Regenerate title**. While T3 Code is generating it, the action reads **Regenerating…** and cannot
 be selected again. The option is hidden when the connected environment needs a server update.
 
+To customize generated titles, open **Settings → General → Thread title instructions**. T3 Code
+appends these instructions to its built-in title rules for both automatic and regenerated titles.
+Leave the setting empty to use the default behavior.
+
 To rename the active thread, open the Command Palette and choose **Rename thread**. This opens the
 same inline editor as the thread context menu.
 

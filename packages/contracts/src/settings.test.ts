@@ -377,6 +377,17 @@ describe("ServerSettings.sourceControlWritingStyle", () => {
   });
 });
 
+describe("ServerSettings.threadTitleInstructions", () => {
+  it("defaults to empty and trims custom instructions", () => {
+    expect(decodeServerSettings({}).threadTitleInstructions).toBe("");
+    expect(
+      decodeServerSettingsPatch({
+        threadTitleInstructions: "  Use sentence case for every title.  ",
+      }).threadTitleInstructions,
+    ).toBe("Use sentence case for every title.");
+  });
+});
+
 describe("ServerSettingsPatch.providerInstances", () => {
   it("treats providerInstances as an optional whole-map replacement", () => {
     const patch = decodeServerSettingsPatch({});
