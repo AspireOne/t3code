@@ -2326,12 +2326,7 @@ function OpenCommandPaletteDialog(props: {
   const resolvedHighlightedItemValue = resolveCommandPaletteHighlightedItemValue({
     groups: displayedGroups,
     highlightedItemValue,
-    autoHighlight:
-      isElectron &&
-      query === deferredQuery &&
-      deferredQuery.trim().length > 0 &&
-      !isBrowsing &&
-      !isRemoteProjectCloneFlow,
+    autoHighlight: !isBrowsing && !isRemoteProjectCloneFlow,
   });
 
   const inputPlaceholder =

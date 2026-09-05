@@ -128,7 +128,7 @@ describe("resolveCommandPaletteHighlightedItemValue", () => {
     run: async () => undefined,
   });
 
-  it("preselects the first enabled result across groups", () => {
+  it("preselects the first enabled result after a query clears the current highlight", () => {
     const groups: CommandPaletteGroup[] = [
       { value: "actions", label: "Actions", items: [action("disabled", true)] },
       { value: "threads", label: "Threads", items: [action("first"), action("second")] },
