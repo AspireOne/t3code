@@ -13,6 +13,9 @@ From the repository root in WSL:
 
 # Build, back up state, install, relaunch, and verify WSL health.
 ./build-install-windows.sh
+
+# Force a fresh JavaScript build and staged dependency installs.
+./build-install-windows.sh --no-cache
 ```
 
 ## Sync `main`
@@ -57,6 +60,22 @@ WSL mode, and runs Electron Builder through Wine:
 
 For the build and install commands, see [Quick build / install](#quick-build--install)
 above.
+
+The helper keeps verified build outputs and staged production dependency trees
+in the repository's Git directory, keyed by tracked source, manifests,
+toolchain metadata, and build environment. Cached trees are copied into each
+temporary packaging directory before electron-builder runs, so packaging can
+mutate its copy without weakening the next run. Windows Cargo intermediates
+live under `%LOCALAPPDATA%/T3Code/build-cache`; Cargo still checks source,
+lockfile, target, and compiler inputs on every invocation. Use `--no-cache` to
+diagnose a clean JavaScript and staged-dependency rebuild. Each run prints
+timings for the major build, package, backup, install, launch, and health-check
+phases. The helper retains two recent cache entries per kind automatically.
+
+State backups use `rsync --link-dest` against the last complete snapshot when
+possible. Every snapshot remains a complete point-in-time tree, while
+unchanged files consume no additional space. The `latest-windows-install`
+link is published only after all requested state copies succeed.
 
 The normal output is `release/T3-Code-<version>-x64.exe`. The helper prints the
 source commit, artifact path, and SHA-256 for each build. Artifacts are unsigned

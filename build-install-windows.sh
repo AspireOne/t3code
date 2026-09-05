@@ -6,7 +6,7 @@ usage() {
 Build and optionally install this fork's Windows x64 desktop artifact from WSL.
 
 Usage:
-  build-install-windows.sh [--preflight | --build-only] [--no-backup] [--no-launch] [--no-verify] [--verbose]
+  build-install-windows.sh [--preflight | --build-only] [--no-cache] [--no-backup] [--no-launch] [--no-verify] [--verbose]
 
 Default behavior:
   1. Require a clean Git worktree and current build prerequisites.
@@ -18,6 +18,7 @@ Default behavior:
 Options:
   --preflight    Check prerequisites and repository state only.
   --build-only   Build and validate the artifact without touching the installation.
+  --no-cache     Rebuild JS and reinstall staged dependencies without local cache reuse.
   --no-backup    Skip the pre-install state backup.
   --no-launch    Install but do not relaunch T3 Code.
   --no-verify    Relaunch without waiting for the WSL health endpoint.
@@ -38,11 +39,29 @@ backup_enabled=true
 launch_enabled=true
 verify_enabled=true
 verbose_enabled=false
+cache_enabled=true
+resource_pid=""
+run_started=$SECONDS
 
+timed() {
+  local label=$1 started=$SECONDS status=0
+  shift
+  "$@" || status=$?
+  printf 'Timing: %s: %ss (exit %s)\n' "$label" "$((SECONDS - started))" "$status"
+  return "$status"
+}
+
+finish() {
+  local status=$?
+  # Await the child we started even when the foreground build fails.
+  if [[ -n "$resource_pid" ]]; then wait "$resource_pid" || true; fi
+  printf 'Timing: total: %ss (exit %s)\n' "$((SECONDS - run_started))" "$status"
+}
 while (($# > 0)); do
   case "$1" in
     --preflight) mode="preflight" ;;
     --build-only) mode="build" ;;
+    --no-cache) cache_enabled=false ;;
     --no-backup) backup_enabled=false ;;
     --no-launch) launch_enabled=false ;;
     --no-verify) verify_enabled=false ;;
@@ -53,6 +72,8 @@ while (($# > 0)); do
   shift
 done
 
+trap finish EXIT
+
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 repo_root=$(git -C "$script_dir" rev-parse --show-toplevel)
 git_dir=$(git -C "$repo_root" rev-parse --git-dir)
@@ -62,7 +83,7 @@ support_dir="$repo_root/.agents/skills/updating-t3-fork/scripts"
 
 [[ -n "${WSL_DISTRO_NAME:-}" ]] || fail "run this helper from WSL"
 
-for command in git vp jq curl rsync wslpath pwsh.exe sha256sum flock; do
+for command in node git vp jq curl rsync wslpath pwsh.exe sha256sum flock; do
   command -v "$command" >/dev/null 2>&1 || fail "required command is missing: $command"
 done
 
@@ -92,25 +113,38 @@ if [[ "$mode" = "preflight" ]]; then
   exit 0
 fi
 
-vp i
+timed "workspace dependencies" vp i
 
 post_install_dirty=$(git status --porcelain --untracked-files=normal)
 [[ -z "$post_install_dirty" ]] ||
   fail "vp i changed tracked or untracked repository files; review and commit them before building"
 
-pwsh.exe -NoProfile -ExecutionPolicy Bypass \
+if [[ "$cache_enabled" = true ]]; then
+  export T3CODE_WINDOWS_BUILD_CACHE="$git_dir/t3-windows-build-cache"
+else
+  unset T3CODE_WINDOWS_BUILD_CACHE
+fi
+
+timed "Windows resource monitor" pwsh.exe -NoProfile -ExecutionPolicy Bypass \
   -File "$resource_script_windows" \
   -RepoRoot "$repo_root_windows" \
-  -Arch x64
+  -Arch x64 &
+resource_pid=$!
+
+timed "desktop/server/web build" node scripts/windows-build-cache.ts build
+resource_status=0
+wait "$resource_pid" || resource_status=$?
+resource_pid=""
+[[ "$resource_status" = 0 ]] || fail "Windows resource-monitor build failed"
 
 wsl_prebuild="$repo_root/apps/server/node_modules/node-pty/build/Release/pty.node"
 [[ -f "$wsl_prebuild" ]] || fail "Linux node-pty prebuild is missing at $wsl_prebuild"
 
-build_args=(run dist:desktop:win:x64 --wsl-prebuild "$wsl_prebuild")
+build_args=(run dist:desktop:win:x64 --skip-build --wsl-prebuild "$wsl_prebuild")
 if [[ "$verbose_enabled" = true ]]; then
   build_args+=(--verbose)
 fi
-T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR=true vp "${build_args[@]}"
+T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR=true timed "package and validate" vp "${build_args[@]}"
 
 version=$(jq -er '.version | select(type == "string" and length > 0)' apps/desktop/package.json)
 artifact="$repo_root/release/T3-Code-$version-x64.exe"
@@ -130,7 +164,7 @@ if [[ -f "$runtime_state" ]]; then
   runtime_pid=$(jq -r '.pid // empty' "$runtime_state" 2>/dev/null || true)
 fi
 
-pwsh.exe -NoProfile -ExecutionPolicy Bypass \
+timed "stop installation" pwsh.exe -NoProfile -ExecutionPolicy Bypass \
   -File "$manager_script_windows" \
   -Action Stop
 
@@ -145,15 +179,25 @@ fi
 
 backup_dir=""
 if [[ "$backup_enabled" = true ]]; then
-  timestamp=$(date -u +%Y%m%dT%H%M%SZ)
+  backup_started=$SECONDS
+  timestamp=$(date -u +%Y%m%dT%H%M%S%NZ)
   backup_parent="$(dirname "$repo_root")/t3code-backups"
   backup_dir="$backup_parent/before-$version-$timestamp-$(git rev-parse --short=12 HEAD)"
   mkdir -p -- "$backup_parent"
   mkdir -m 700 -- "$backup_dir"
+  previous_backup=$(readlink -f -- "$backup_parent/latest-windows-install" || true)
+  backup_state() {
+    local source=$1 name=$2
+    local args=(-a --chmod=go-rwx)
+    if [[ -n "$previous_backup" && -d "$previous_backup/$name" ]]; then
+      args+=(--link-dest="$previous_backup/$name")
+    fi
+    mkdir -m 700 -- "$backup_dir/$name"
+    rsync "${args[@]}" -- "$source/" "$backup_dir/$name/"
+  }
 
   if [[ -d "$linux_home/.t3" ]]; then
-    mkdir -m 700 -- "$backup_dir/wsl-t3"
-    rsync -a -- "$linux_home/.t3/" "$backup_dir/wsl-t3/"
+    backup_state "$linux_home/.t3" wsl-t3
   fi
 
   windows_app_data=$(pwsh.exe -NoProfile -Command '[Environment]::GetFolderPath("ApplicationData")' | tr -d '\r')
@@ -162,17 +206,19 @@ if [[ "$backup_enabled" = true ]]; then
     state_path="$windows_app_data_wsl/$state_name"
     if [[ -d "$state_path" ]]; then
       backup_name="windows-roaming-${state_name// /-}"
-      mkdir -m 700 -- "$backup_dir/$backup_name"
-      rsync -a -- "$state_path/" "$backup_dir/$backup_name/"
+      backup_state "$state_path" "$backup_name"
     fi
   done
 
-  chmod -R go-rwx -- "$backup_dir"
+  # Publish only a complete backup. Never chmod hard-linked files afterward.
+  ln -s -- "$backup_dir" "$backup_dir.latest"
+  mv -Tf -- "$backup_dir.latest" "$backup_parent/latest-windows-install"
+  printf 'Timing: state backup: %ss\n' "$((SECONDS - backup_started))"
   printf 'Backup: %s\n' "$backup_dir"
 fi
 
 artifact_windows=$(wslpath -w "$artifact")
-pwsh.exe -NoProfile -ExecutionPolicy Bypass \
+timed "install" pwsh.exe -NoProfile -ExecutionPolicy Bypass \
   -File "$manager_script_windows" \
   -Action Install \
   -InstallerPath "$artifact_windows"
@@ -184,7 +230,7 @@ fi
 
 printf 'Waiting for Windows to finish installer cleanup...\n'
 launch_started_epoch=$(date -u +%s)
-pwsh.exe -NoProfile -ExecutionPolicy Bypass \
+timed "launch" pwsh.exe -NoProfile -ExecutionPolicy Bypass \
   -File "$manager_script_windows" \
   -Action Launch
 
@@ -199,6 +245,7 @@ if [[ "$verify_enabled" = false ]]; then
   exit 0
 fi
 
+health_started=$SECONDS
 health_payload=""
 for _ in $(seq 1 90); do
   if [[ -f "$runtime_state" ]]; then
@@ -228,4 +275,5 @@ health_os=$(jq -r '.platform.os // empty' <<<"$health_payload")
 pwsh.exe -NoProfile -ExecutionPolicy Bypass \
   -File "$manager_script_windows" \
   -Action Status
+printf 'Timing: health verification: %ss\n' "$((SECONDS - health_started))"
 printf 'Installed fork %s is running with a healthy WSL backend.\n' "$version"
