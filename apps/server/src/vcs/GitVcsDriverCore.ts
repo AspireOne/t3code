@@ -31,6 +31,7 @@ import { compactTraceAttributes } from "@t3tools/shared/observability";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
+import { parseGitNumstat } from "./gitDiff.ts";
 import {
   parseRemoteNames,
   parseRemoteNamesInGitOrder,
@@ -39,6 +40,15 @@ import {
 import { ServerConfig } from "../config.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const LOCAL_STATUS_ARGS = [
+  "-c",
+  "status.relativePaths=false",
+  "status",
+  "--porcelain=2",
+  "--branch",
+  "--untracked-files=all",
+  "-z",
+] as const;
 // `git worktree add` checks out the full tree, so on large repositories it can
 // take well beyond the default 30s (e.g. a 375k-file repo takes ~40s on an idle
 // machine). Give it generous headroom while still bounding a genuinely hung git.
@@ -175,50 +185,23 @@ function parseBranchAb(value: string): { ahead: number; behind: number } {
   };
 }
 
-function parseNumstatEntries(
-  stdout: string,
-): Array<{ path: string; insertions: number; deletions: number }> {
-  const entries: Array<{ path: string; insertions: number; deletions: number }> = [];
-  for (const line of stdout.split(/\r?\n/g)) {
-    if (line.trim().length === 0) continue;
-    const [addedRaw, deletedRaw, ...pathParts] = line.split("\t");
-    const rawPath =
-      pathParts.length > 1 ? (pathParts.at(-1) ?? "").trim() : pathParts.join("\t").trim();
-    if (rawPath.length === 0) continue;
-    const added = Number.parseInt(addedRaw ?? "0", 10);
-    const deleted = Number.parseInt(deletedRaw ?? "0", 10);
-    const renameArrowIndex = rawPath.indexOf(" => ");
-    const normalizedPath =
-      renameArrowIndex >= 0 ? rawPath.slice(renameArrowIndex + " => ".length).trim() : rawPath;
-    entries.push({
-      path: normalizedPath.length > 0 ? normalizedPath : rawPath,
-      insertions: Number.isFinite(added) ? added : 0,
-      deletions: Number.isFinite(deleted) ? deleted : 0,
-    });
+/** Extracts the literal path from a NUL-delimited porcelain v2 record. */
+function parsePorcelainPath(record: string): string | null {
+  if (record.startsWith("? ") || record.startsWith("! ")) return record.slice(2);
+  const fields = record.startsWith("1 ")
+    ? 8
+    : record.startsWith("2 ")
+      ? 9
+      : record.startsWith("u ")
+        ? 10
+        : 0;
+  if (fields === 0) return null;
+  let offset = -1;
+  for (let field = 0; field < fields; field += 1) {
+    offset = record.indexOf(" ", offset + 1);
+    if (offset < 0) return null;
   }
-  return entries;
-}
-
-function parsePorcelainPath(line: string): string | null {
-  if (line.startsWith("? ") || line.startsWith("! ")) {
-    const simple = line.slice(2).trim();
-    return simple.length > 0 ? simple : null;
-  }
-
-  if (!(line.startsWith("1 ") || line.startsWith("2 ") || line.startsWith("u "))) {
-    return null;
-  }
-
-  const tabIndex = line.indexOf("\t");
-  if (tabIndex >= 0) {
-    const fromTab = line.slice(tabIndex + 1);
-    const [filePath] = fromTab.split("\t");
-    return filePath?.trim().length ? filePath.trim() : null;
-  }
-
-  const parts = line.trim().split(/\s+/g);
-  const filePath = parts.at(-1) ?? "";
-  return filePath.length > 0 ? filePath : null;
+  return record.slice(offset + 1);
 }
 
 function filterBranchesForListQuery(
@@ -1631,7 +1614,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const statusResult = yield* executeGitWithStableDiagnostics(
       "GitVcsDriver.statusDetails.status",
       cwd,
-      ["status", "--porcelain=2", "--branch"],
+      LOCAL_STATUS_ARGS,
       {
         allowNonZeroExit: true,
       },
@@ -1654,7 +1637,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         ...gitCommandContext({
           operation: "GitVcsDriver.statusDetails.status",
           cwd,
-          args: ["status", "--porcelain=2", "--branch"],
+          args: LOCAL_STATUS_ARGS,
         }),
         detail: "Git status failed.",
         exitCode: statusResult.exitCode,
@@ -1667,45 +1650,51 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       Effect.catchTags({ GitCommandError: () => Effect.succeed(null) }),
     );
     const statusCacheKey = repositoryPaths?.gitCommonDir;
-    const [numstatStdout, defaultBranch, hasPrimaryRemote] = yield* Effect.all(
+    const [numstatEntries, defaultBranch, hasPrimaryRemote] = yield* Effect.all(
       [
         executeGitWithStableDiagnostics(
           "GitVcsDriver.statusDetails.numstat",
           cwd,
-          ["diff", "HEAD", "--numstat", "--"],
+          ["diff", "HEAD", "--numstat", "-z", "--no-relative", "--"],
           { allowNonZeroExit: true },
         ).pipe(
           Effect.flatMap((result) => {
-            if (result.exitCode === 0) return Effect.succeed(result.stdout);
+            if (result.exitCode === 0) return Effect.succeed(parseGitNumstat(result.stdout));
             if (isUnbornHeadStderr(result.stderr)) {
               return Effect.map(
                 Effect.all([
                   runGitStdout("GitVcsDriver.statusDetails.numstat.unborn", cwd, [
                     "diff",
                     "--numstat",
+                    "-z",
+                    "--no-relative",
                   ]),
                   runGitStdout("GitVcsDriver.statusDetails.numstat.unborn.staged", cwd, [
                     "diff",
                     "--cached",
                     "--numstat",
+                    "-z",
+                    "--no-relative",
                   ]),
                 ]),
                 ([unstagedStdout, stagedStdout]) => {
-                  const staged = parseNumstatEntries(stagedStdout);
-                  const unstaged = parseNumstatEntries(unstagedStdout);
+                  const staged = parseGitNumstat(stagedStdout);
+                  const unstaged = parseGitNumstat(unstagedStdout);
                   const map = new Map<string, { insertions: number; deletions: number }>();
                   for (const entry of [...staged, ...unstaged]) {
                     const existing = map.get(entry.path) ?? {
                       insertions: 0,
                       deletions: 0,
                     };
-                    existing.insertions += entry.insertions;
+                    existing.insertions += entry.additions;
                     existing.deletions += entry.deletions;
                     map.set(entry.path, existing);
                   }
-                  return Array.from(map.entries())
-                    .map(([p, s]) => `${s.insertions}\t${s.deletions}\t${p}`)
-                    .join("\n");
+                  return Array.from(map, ([path, stat]) => ({
+                    path,
+                    additions: stat.insertions,
+                    deletions: stat.deletions,
+                  }));
                 },
               );
             }
@@ -1714,7 +1703,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
                 ...gitCommandContext({
                   operation: "GitVcsDriver.statusDetails.numstat",
                   cwd,
-                  args: ["diff", "HEAD", "--numstat", "--"],
+                  args: ["diff", "HEAD", "--numstat", "-z", "--no-relative", "--"],
                 }),
                 detail: "git diff HEAD --numstat failed.",
                 exitCode: result.exitCode,
@@ -1751,7 +1740,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     };
     const changedFilesWithoutNumstat = new Set<string>();
 
-    for (const line of statusStdout.split(/\r?\n/g)) {
+    const statusRecords = statusStdout.split("\0");
+    for (let index = 0; index < statusRecords.length; index += 1) {
+      const line = statusRecords[index]!;
+      // Renames carry the source path in a second record. Only the destination
+      // identifies the changed file presented to clients.
+      if (line.startsWith("2 ")) index += 1;
       if (line.startsWith("# branch.head ")) {
         const value = line.slice("# branch.head ".length).trim();
         refName = value.startsWith("(") ? null : value;
@@ -1820,10 +1814,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           : yield* computeAheadCountAgainstBase(cwd, refName).pipe(Effect.orElseSucceed(() => 0));
     }
 
-    const numstatEntries = parseNumstatEntries(numstatStdout);
     const fileStatMap = new Map<string, { insertions: number; deletions: number }>();
     for (const entry of numstatEntries) {
-      fileStatMap.set(entry.path, { insertions: entry.insertions, deletions: entry.deletions });
+      fileStatMap.set(entry.path, { insertions: entry.additions, deletions: entry.deletions });
     }
 
     let insertions = 0;
@@ -1915,13 +1908,47 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
   const prepareCommitContext: GitVcsDriver.GitVcsDriver["Service"]["prepareCommitContext"] =
     Effect.fn("prepareCommitContext")(function* (cwd, filePaths) {
+      // Status paths are repository-relative even when a project is a subdirectory.
+      const repositoryCwd = (yield* resolveRepositoryPaths(cwd))?.worktreeRoot ?? cwd;
       if (filePaths && filePaths.length > 0) {
+        const selectedPaths = new Set(filePaths);
+        const renamedSources: string[] = [];
+        const status = yield* runGitStdout(
+          "GitVcsDriver.prepareCommitContext.renames",
+          repositoryCwd,
+          LOCAL_STATUS_ARGS,
+        );
+        const records = status.split("\0");
+        for (let index = 0; index < records.length; index += 1) {
+          const record = records[index]!;
+          if (!record.startsWith("2 ")) continue;
+          const source = records[++index];
+          const destination = parsePorcelainPath(record);
+          if (
+            source &&
+            destination &&
+            selectedPaths.has(destination) &&
+            record.split(" ", 2)[1]?.includes("R")
+          ) {
+            renamedSources.push(source);
+          }
+        }
         yield* runGit("GitVcsDriver.prepareCommitContext.reset", cwd, ["reset"]).pipe(
           Effect.catchTags({
             GitCommandError: () => Effect.void,
           }),
         );
-        yield* runGit("GitVcsDriver.prepareCommitContext.addSelected", cwd, [
+        if (renamedSources.length > 0) {
+          // Stage the rename's deletion without picking up an excluded file
+          // that may have been recreated at the old path.
+          yield* runGit("GitVcsDriver.prepareCommitContext.removeRenamedSources", repositoryCwd, [
+            "update-index",
+            "--force-remove",
+            "--",
+            ...renamedSources,
+          ]);
+        }
+        yield* runGit("GitVcsDriver.prepareCommitContext.addSelected", repositoryCwd, [
           "--literal-pathspecs",
           "add",
           "-A",

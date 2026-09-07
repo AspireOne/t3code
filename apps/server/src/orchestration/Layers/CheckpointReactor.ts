@@ -24,7 +24,7 @@ import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 
-import { parseTurnDiffFilesFromNumstat } from "../../checkpointing/Diffs.ts";
+import { parseGitNumstat } from "../../vcs/gitDiff.ts";
 import {
   checkpointRefForThreadTurn,
   resolveThreadWorkspaceCwd,
@@ -297,7 +297,7 @@ const make = Effect.gen(function* () {
         : Effect.succeed("")
     ).pipe(
       Effect.map((diff) =>
-        parseTurnDiffFilesFromNumstat(diff).map((file) => ({
+        parseGitNumstat(diff).map((file) => ({
           path: file.path,
           kind: "modified" as const,
           additions: file.additions,

@@ -210,7 +210,18 @@ it.effect("uses stable diagnostics for every parsed non-repository command", () 
 
     assert.deepStrictEqual(commands, [
       { args: ["rev-parse", "--git-path", "index"], lcAll: "C" },
-      { args: ["status", "--porcelain=2", "--branch"], lcAll: "C" },
+      {
+        args: [
+          "-c",
+          "status.relativePaths=false",
+          "status",
+          "--porcelain=2",
+          "--branch",
+          "--untracked-files=all",
+          "-z",
+        ],
+        lcAll: "C",
+      },
       { args: ["rev-parse", "--abbrev-ref", "HEAD"], lcAll: "C" },
       { args: ["rev-parse", "--git-common-dir"], lcAll: "C" },
     ]);
@@ -1061,6 +1072,90 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
   });
 
   describe("repository status", () => {
+    it.effect("reports exact paths once for spaced filenames and directory renames", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        yield* writeTextFile(cwd, "notes with spaces.txt", "before\n");
+        yield* writeTextFile(cwd, "src/old name.txt", "rename\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "filename fixtures"]);
+        yield* writeTextFile(cwd, "notes with spaces.txt", "after\n");
+        yield* git(cwd, ["mv", "src/old name.txt", "src/new name.txt"]);
+        const status = yield* (yield* GitVcsDriver.GitVcsDriver).statusDetailsLocal(cwd);
+        assert.deepStrictEqual(status.workingTree.files, [
+          { path: "notes with spaces.txt", insertions: 1, deletions: 1 },
+          { path: "src/new name.txt", insertions: 0, deletions: 0 },
+        ]);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        // A recreated source is a separate untracked file, excluded from this commit.
+        yield* writeTextFile(cwd, "src/old name.txt", "new untracked content\n");
+        yield* driver.prepareCommitContext(cwd, ["src/new name.txt"]);
+        assert.equal(
+          yield* git(cwd, ["diff", "--cached", "--name-status"]),
+          "R100\tsrc/old name.txt\tsrc/new name.txt",
+        );
+        assert.equal(
+          yield* git(cwd, ["ls-files", "--others", "--exclude-standard"]),
+          "src/old name.txt",
+        );
+      }),
+    );
+
+    it.effect("uses repository paths for nested status and selective staging", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        yield* writeTextFile(cwd, "app/main.ts", "before\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "nested fixture"]);
+        yield* writeTextFile(cwd, "app/main.ts", "after\n");
+        yield* writeTextFile(cwd, "README.md", "other edit\n");
+        const path = yield* Path.Path;
+        const nested = path.join(cwd, "app");
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const status = yield* driver.statusDetailsLocal(nested);
+        assert.deepStrictEqual(
+          status.workingTree.files.map((file) => file.path),
+          ["app/main.ts", "README.md"],
+        );
+        yield* driver.prepareCommitContext(nested, ["app/main.ts"]);
+        assert.equal(yield* git(cwd, ["diff", "--cached", "--name-only"]), "app/main.ts");
+      }),
+    );
+
+    it.effect("preserves Unicode, tabs, newlines, and surrounding spaces in paths", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const names =
+          (yield* HostProcessPlatform) === "win32"
+            ? ["žluťoučký.txt"]
+            : [
+                "žluťoučký.txt",
+                "a => b.txt",
+                "tabs\there.txt",
+                "line\nbreak.txt",
+                " leading and trailing ",
+              ];
+        for (const name of names) yield* writeTextFile(cwd, name, "before\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "unusual filename fixtures"]);
+        for (const name of names) yield* writeTextFile(cwd, name, "after\n");
+        yield* writeTextFile(cwd, "untracked folder/one.txt", "new\n");
+        yield* writeTextFile(cwd, "untracked folder/two.txt", "new\n");
+        const status = yield* (yield* GitVcsDriver.GitVcsDriver).statusDetailsLocal(cwd);
+        assert.deepStrictEqual(
+          status.workingTree.files.map((file) => file.path),
+          [...names, "untracked folder/one.txt", "untracked folder/two.txt"].sort((a, b) =>
+            a.localeCompare(b),
+          ),
+        );
+        assert.equal(status.workingTree.insertions, names.length);
+        assert.equal(status.workingTree.deletions, names.length);
+      }),
+    );
+
     it.effect("reports non-repository directories without failing", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();

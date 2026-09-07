@@ -13,7 +13,7 @@ import * as Scope from "effect/Scope";
 import { describe, expect } from "vite-plus/test";
 
 import { checkpointRefForThreadTurn } from "./Utils.ts";
-import { parseTurnDiffFilesFromNumstat } from "./Diffs.ts";
+import { parseGitNumstat } from "../vcs/gitDiff.ts";
 import * as CheckpointStore from "./CheckpointStore.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
@@ -150,9 +150,7 @@ it.layer(TestLayer)("CheckpointStore.layer", (it) => {
           expect(patch).toContain("+agent edit");
           expect(patch).not.toContain("manual.txt");
           expect(
-            parseTurnDiffFilesFromNumstat(
-              yield* store.diffCheckpoints({ ...input, format: "numstat" }),
-            ),
+            parseGitNumstat(yield* store.diffCheckpoints({ ...input, format: "numstat" })),
           ).toEqual([{ path: "README.md", additions: 1, deletions: 1 }]);
           expect(yield* git(cwd, ["show", `${previous}:README.md`])).toBe("# test");
           expect(yield* store.diffCheckpoints({ ...input, useTurnBaseline: false })).toContain(
@@ -337,7 +335,7 @@ it.layer(TestLayer)("CheckpointStore.layer", (it) => {
             ignoreWhitespace,
             format: "numstat",
           });
-          expect(parseTurnDiffFilesFromNumstat(numstat)).toEqual([
+          expect(parseGitNumstat(numstat)).toEqual([
             {
               path: "Component.tsx",
               additions: ignoreWhitespace ? 4 : 6,
@@ -373,7 +371,7 @@ it.layer(TestLayer)("CheckpointStore.layer", (it) => {
           format: "numstat",
         });
 
-        expect(parseTurnDiffFilesFromNumstat(numstat)).toEqual([
+        expect(parseGitNumstat(numstat)).toEqual([
           { path: "README.md", additions: lineCount, deletions: lineCount },
         ]);
         expect(numstat.length).toBeLessThan(100);
@@ -431,9 +429,7 @@ it.layer(TestLayer)("CheckpointStore.layer", (it) => {
           ignoreWhitespace: false,
           format: "numstat" as const,
         };
-        const firstSummary = parseTurnDiffFilesFromNumstat(
-          yield* checkpointStore.diffCheckpoints(input),
-        );
+        const firstSummary = parseGitNumstat(yield* checkpointStore.diffCheckpoints(input));
         const expectedFiles = [
           { path: "binary.bin", additions: 0, deletions: 0 },
           { path: "copied.txt", additions: 0, deletions: 0 },
@@ -448,7 +444,7 @@ it.layer(TestLayer)("CheckpointStore.layer", (it) => {
         yield* fileSystem.remove(NodePath.join(tmp, "empty.txt"));
         yield* writeTextFile(NodePath.join(tmp, "copy-source.txt"), "replacement\n");
         yield* checkpointStore.captureCheckpoint({ cwd: tmp, checkpointRef: secondTurn });
-        const secondSummary = parseTurnDiffFilesFromNumstat(
+        const secondSummary = parseGitNumstat(
           yield* checkpointStore.diffCheckpoints({
             ...input,
             fromCheckpointRef: firstTurn,
@@ -460,7 +456,7 @@ it.layer(TestLayer)("CheckpointStore.layer", (it) => {
           { path: "empty.txt", additions: 0, deletions: 0 },
         ]);
 
-        const inclusiveSummary = parseTurnDiffFilesFromNumstat(
+        const inclusiveSummary = parseGitNumstat(
           yield* checkpointStore.diffCheckpoints({ ...input, toCheckpointRef: secondTurn }),
         );
         expect(inclusiveSummary).toEqual(
@@ -501,7 +497,7 @@ it.layer(TestLayer)("CheckpointStore.layer", (it) => {
           ...input,
           fallbackFromToHead: true,
         });
-        expect(parseTurnDiffFilesFromNumstat(numstat)).toEqual([
+        expect(parseGitNumstat(numstat)).toEqual([
           { path: "README.md", additions: 1, deletions: 1 },
         ]);
       }),
