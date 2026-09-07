@@ -343,6 +343,10 @@ export class GitVcsDriver extends Context.Service<
 const WORKSPACE_FILES_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const GIT_CHECK_IGNORE_MAX_STDIN_BYTES = 256 * 1024;
 const CHECKPOINT_DIFF_MAX_OUTPUT_BYTES = 10_000_000;
+// Completion commits retain their starting tree as a parent, so copying or
+// deleting checkpoint refs cannot detach the baseline from its turn.
+const TURN_BASELINE_AVAILABLE = "T3-Turn-Baseline: available";
+const TURN_BASELINE_UNAVAILABLE = "T3-Turn-Baseline: unavailable";
 const WORKSPACE_GIT_HARDENED_CONFIG_ARGS = [
   "-c",
   "core.fsmonitor=false",
@@ -768,11 +772,21 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           });
         }
 
+        const baseline = input.turnBaselineCheckpointRef;
         const message = `t3 checkpoint ref=${input.checkpointRef}`;
         const commitTreeResult = yield* execute({
           operation,
           cwd: input.cwd,
-          args: ["commit-tree", treeOid, "-m", message],
+          args: [
+            "commit-tree",
+            treeOid,
+            "-m",
+            message,
+            ...(baseline === undefined
+              ? []
+              : ["-m", baseline === null ? TURN_BASELINE_UNAVAILABLE : TURN_BASELINE_AVAILABLE]),
+            ...(baseline ? ["-p", baseline] : []),
+          ],
           env: commitEnv,
         });
         const commitOid = commitTreeResult.stdout.trim();
@@ -858,7 +872,28 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       });
 
       let fromRevision: string = input.fromCheckpointRef;
-      if (input.fallbackFromToHead === true) {
+      if (input.useTurnBaseline) {
+        const metadata = yield* execute({
+          operation,
+          cwd: input.cwd,
+          args: ["show", "--no-patch", "--format=%P%n%B", `${input.toCheckpointRef}^{commit}`],
+        });
+        const [parents = "", ...message] = metadata.stdout.split("\n");
+        if (message.includes(TURN_BASELINE_UNAVAILABLE)) {
+          return yield* new VcsProcessExitError({
+            operation,
+            command: "git diff",
+            cwd: input.cwd,
+            exitCode: 1,
+            detail:
+              "Turn diff unavailable: its starting snapshot is missing or another turn overlapped this workspace.",
+          });
+        }
+        if (message.includes(TURN_BASELINE_AVAILABLE)) {
+          fromRevision = parents.split(" ")[0]!;
+        }
+      }
+      if (input.fallbackFromToHead === true && fromRevision === input.fromCheckpointRef) {
         const resolvedFromCommit = yield* resolveCheckpointCommit(
           input.cwd,
           input.fromCheckpointRef,

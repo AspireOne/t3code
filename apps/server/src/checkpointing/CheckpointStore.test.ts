@@ -117,6 +117,82 @@ it.layer(TestLayer)("CheckpointStore.layer", (it) => {
   });
 
   describe("diffCheckpoints", () => {
+    it.effect(
+      "keeps a turn's starting snapshot independent of the previous restore checkpoint",
+      () =>
+        Effect.gen(function* () {
+          const cwd = yield* makeTmpDir();
+          yield* initRepoWithCommit(cwd);
+          const store = yield* CheckpointStore.CheckpointStore;
+          const threadId = ThreadId.make("separate-turn-baseline");
+          const previous = checkpointRefForThreadTurn(threadId, 1);
+          const baseline = checkpointRefForThreadTurn(threadId, 99);
+          const completed = checkpointRefForThreadTurn(threadId, 2);
+          yield* store.captureCheckpoint({ cwd, checkpointRef: previous });
+          yield* writeTextFile(NodePath.join(cwd, "manual.txt"), "between turns\n");
+          yield* store.captureCheckpoint({ cwd, checkpointRef: baseline });
+          yield* writeTextFile(NodePath.join(cwd, "README.md"), "agent edit\n");
+          yield* store.captureCheckpoint({
+            cwd,
+            checkpointRef: completed,
+            turnBaselineCheckpointRef: baseline,
+          });
+          // The ending checkpoint owns its baseline even after temporary refs are removed.
+          yield* store.deleteCheckpointRefs({ cwd, checkpointRefs: [baseline] });
+          const input = {
+            cwd,
+            fromCheckpointRef: previous,
+            toCheckpointRef: completed,
+            ignoreWhitespace: false,
+            useTurnBaseline: true,
+          };
+          const patch = yield* store.diffCheckpoints(input);
+          expect(patch).toContain("+agent edit");
+          expect(patch).not.toContain("manual.txt");
+          expect(
+            parseTurnDiffFilesFromNumstat(
+              yield* store.diffCheckpoints({ ...input, format: "numstat" }),
+            ),
+          ).toEqual([{ path: "README.md", additions: 1, deletions: 1 }]);
+          expect(yield* git(cwd, ["show", `${previous}:README.md`])).toBe("# test");
+          expect(yield* store.diffCheckpoints({ ...input, useTurnBaseline: false })).toContain(
+            "manual.txt",
+          );
+        }),
+    );
+
+    it.effect("reports unavailable attribution instead of inventing a turn baseline", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const store = yield* CheckpointStore.CheckpointStore;
+        const threadId = ThreadId.make("unavailable-turn-baseline");
+        const previous = checkpointRefForThreadTurn(threadId, 0);
+        const completed = checkpointRefForThreadTurn(threadId, 1);
+        yield* store.captureCheckpoint({ cwd, checkpointRef: previous });
+        yield* writeTextFile(NodePath.join(cwd, "README.md"), "unattributed edit\n");
+        yield* store.captureCheckpoint({
+          cwd,
+          checkpointRef: completed,
+          turnBaselineCheckpointRef: null,
+        });
+        const result = yield* store
+          .diffCheckpoints({
+            cwd,
+            fromCheckpointRef: previous,
+            toCheckpointRef: completed,
+            ignoreWhitespace: false,
+            useTurnBaseline: true,
+          })
+          .pipe(Effect.result);
+        expect(result).toMatchObject({
+          _tag: "Failure",
+          failure: { detail: expect.stringContaining("Turn diff unavailable") },
+        });
+        expect(yield* store.restoreCheckpoint({ cwd, checkpointRef: completed })).toBe(true);
+      }),
+    );
+
     it.effect("returns full oversized checkpoint diffs without truncation", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();

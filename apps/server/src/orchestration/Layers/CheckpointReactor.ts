@@ -1,6 +1,6 @@
 import {
   CommandId,
-  type CheckpointRef,
+  CheckpointRef,
   EventId,
   MessageId,
   type ProjectId,
@@ -14,6 +14,9 @@ import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import type * as PlatformError from "effect/PlatformError";
@@ -42,7 +45,19 @@ import * as PullRequestService from "../../pullRequest/PullRequestService.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
+interface TurnBaseline {
+  readonly cwd: string;
+  turnId: TurnId | null;
+  checkpointRef: CheckpointRef | null;
+}
+
 type ReactorInput =
+  | {
+      readonly source: "prepare";
+      readonly threadId: ThreadId;
+      readonly createdAt: string;
+      readonly done: Deferred.Deferred<void>;
+    }
   | {
       readonly source: "runtime";
       readonly event: ProviderRuntimeEvent;
@@ -93,6 +108,9 @@ const make = Effect.gen(function* () {
   const pullRequests = yield* PullRequestService.PullRequestService;
   const startedTurns = new Map<ThreadId, TurnId>();
   const pending = new Set<ThreadId>();
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const turnBaselines = new Map<ThreadId, TurnBaseline>();
 
   const appendRevertFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -238,11 +256,11 @@ const make = Effect.gen(function* () {
     const fromTurnCount = Math.max(0, input.turnCount - 1);
     const fromCheckpointRef = checkpointRefForThreadTurn(input.threadId, fromTurnCount);
     const targetCheckpointRef = checkpointRefForThreadTurn(input.threadId, input.turnCount);
-
-    const fromCheckpointExists = yield* checkpointStore.hasCheckpointRef({
-      cwd: input.cwd,
-      checkpointRef: fromCheckpointRef,
-    });
+    const baseline = turnBaselines.get(input.threadId);
+    const turnBaselineCheckpointRef =
+      baseline?.turnId === input.turnId ? baseline.checkpointRef : null;
+    const fromCheckpointExists = turnBaselineCheckpointRef !== null;
+    const status = fromCheckpointExists ? input.status : "error";
     if (!fromCheckpointExists) {
       yield* Effect.logWarning("checkpoint capture missing pre-turn baseline", {
         threadId: input.threadId,
@@ -254,7 +272,9 @@ const make = Effect.gen(function* () {
     yield* checkpointStore.captureCheckpoint({
       cwd: input.cwd,
       checkpointRef: targetCheckpointRef,
+      turnBaselineCheckpointRef,
     });
+    turnBaselines.delete(input.threadId);
 
     // Refresh the workspace entry index so the @-mention file picker
     // reflects files created or deleted during this turn.
@@ -272,6 +292,7 @@ const make = Effect.gen(function* () {
             fallbackFromToHead: false,
             ignoreWhitespace: false,
             format: "numstat",
+            useTurnBaseline: true,
           })
         : Effect.succeed("")
     ).pipe(
@@ -315,7 +336,7 @@ const make = Effect.gen(function* () {
       turnId: input.turnId,
       completedAt: input.createdAt,
       checkpointRef: targetCheckpointRef,
-      status: input.status,
+      status,
       files,
       assistantMessageId,
       checkpointTurnCount: input.turnCount,
@@ -327,7 +348,7 @@ const make = Effect.gen(function* () {
       turnId: input.turnId,
       checkpointTurnCount: input.turnCount,
       checkpointRef: targetCheckpointRef,
-      status: input.status,
+      status,
       createdAt: input.createdAt,
     });
     yield* receiptBus.publish({
@@ -344,12 +365,14 @@ const make = Effect.gen(function* () {
       threadId: input.threadId,
       activity: {
         id: EventId.make(yield* randomUUID),
-        tone: "info",
-        kind: "checkpoint.captured",
-        summary: "Checkpoint captured",
+        tone: fromCheckpointExists ? "info" : "error",
+        kind: fromCheckpointExists ? "checkpoint.captured" : "checkpoint.diff.unavailable",
+        summary: fromCheckpointExists
+          ? "Checkpoint captured"
+          : "Turn diff unavailable: overlapping turns or missing starting snapshot. Restore checkpoint saved.",
         payload: {
           turnCount: input.turnCount,
-          status: input.status,
+          status,
         },
         turnId: input.turnId,
         createdAt: input.createdAt,
@@ -427,53 +450,80 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const captureTurnBaseline = Effect.fn("captureTurnBaseline")(function* (
+    threadId: ThreadId,
+    createdAt: string,
+  ) {
+    const active = turnBaselines.get(threadId);
+    // Sending a message to a running provider can steer its existing turn.
+    if (active?.turnId && sameId(startedTurns.get(threadId), active.turnId)) return;
+    turnBaselines.delete(threadId);
+    const thread = yield* resolveThreadDetail(threadId);
+    if (!thread) return;
+    const projects = yield* resolveThreadProjects(thread.projectId);
+    const checkpointCwd = yield* resolveCheckpointCwd({
+      threadId,
+      thread,
+      projects,
+      preferSessionRuntime: true,
+    });
+    if (!checkpointCwd) return;
+    const cwd = yield* fileSystem.realPath(checkpointCwd);
+    const baseline: TurnBaseline = { cwd, turnId: null, checkpointRef: null };
+    let overlaps = false;
+    const within = (value: string) =>
+      value === "" ||
+      (value !== ".." && !value.startsWith(`..${path.sep}`) && !path.isAbsolute(value));
+    for (const other of turnBaselines.values()) {
+      const relative = path.relative(cwd, other.cwd);
+      const reverse = path.relative(other.cwd, cwd);
+      if (within(relative) || within(reverse)) {
+        other.checkpointRef = null;
+        overlaps = true;
+      }
+    }
+    turnBaselines.set(threadId, baseline);
+    const checkpointRef = CheckpointRef.make(`${checkpointRefForThreadTurn(threadId, 0)}-start`);
+    yield* checkpointStore.captureCheckpoint({ cwd, checkpointRef });
+    if (!overlaps) baseline.checkpointRef = checkpointRef;
+    else
+      yield* Effect.logWarning(
+        "turn diff attribution unavailable for overlapping workspace turns",
+        { threadId, cwd },
+      );
+
+    const initialRef = checkpointRefForThreadTurn(threadId, 0);
+    if (
+      thread.checkpoints.length === 0 &&
+      !(yield* checkpointStore.hasCheckpointRef({ cwd, checkpointRef: initialRef }))
+    ) {
+      const copied = yield* (
+        checkpointStore.copyCheckpointRef?.({
+          cwd,
+          sourceCheckpointRef: checkpointRef,
+          targetCheckpointRef: initialRef,
+        }) ?? Effect.succeed(false)
+      );
+      if (!copied) yield* checkpointStore.captureCheckpoint({ cwd, checkpointRef: initialRef });
+      yield* receiptBus.publish({
+        type: "checkpoint.baseline.captured",
+        threadId,
+        checkpointTurnCount: 0,
+        checkpointRef: initialRef,
+        createdAt,
+      });
+    }
+  });
+
   const ensurePreTurnBaselineFromTurnStart = Effect.fn("ensurePreTurnBaselineFromTurnStart")(
     function* (event: Extract<ProviderRuntimeEvent, { type: "turn.started" }>) {
       const turnId = toTurnId(event.turnId);
-      if (!turnId) {
-        return;
+      if (!turnId || !sameId(startedTurns.get(event.threadId), turnId)) return;
+      if (!turnBaselines.has(event.threadId)) {
+        yield* captureTurnBaseline(event.threadId, event.createdAt);
       }
-
-      const thread = yield* resolveThreadDetail(event.threadId);
-      if (!thread) {
-        return;
-      }
-
-      const projects = yield* resolveThreadProjects(thread.projectId);
-      const checkpointCwd = yield* resolveCheckpointCwd({
-        threadId: thread.id,
-        thread,
-        projects,
-        preferSessionRuntime: false,
-      });
-      if (!checkpointCwd) {
-        return;
-      }
-
-      const currentTurnCount = thread.checkpoints.reduce(
-        (maxTurnCount, checkpoint) => Math.max(maxTurnCount, checkpoint.checkpointTurnCount),
-        0,
-      );
-      const baselineCheckpointRef = checkpointRefForThreadTurn(thread.id, currentTurnCount);
-      const baselineExists = yield* checkpointStore.hasCheckpointRef({
-        cwd: checkpointCwd,
-        checkpointRef: baselineCheckpointRef,
-      });
-      if (baselineExists) {
-        return;
-      }
-
-      yield* checkpointStore.captureCheckpoint({
-        cwd: checkpointCwd,
-        checkpointRef: baselineCheckpointRef,
-      });
-      yield* receiptBus.publish({
-        type: "checkpoint.baseline.captured",
-        threadId: thread.id,
-        checkpointTurnCount: currentTurnCount,
-        checkpointRef: baselineCheckpointRef,
-        createdAt: event.createdAt,
-      });
+      const baseline = turnBaselines.get(event.threadId);
+      if (baseline) baseline.turnId = turnId;
     },
   );
 
@@ -853,6 +903,15 @@ const make = Effect.gen(function* () {
   });
 
   const processDomainEvent = Effect.fn("processDomainEvent")(function* (event: OrchestrationEvent) {
+    if (event.type === "thread.session-set") {
+      if (
+        (event.payload.session.status === "error" || event.payload.session.status === "stopped") &&
+        turnBaselines.get(event.payload.threadId)?.turnId === null
+      ) {
+        turnBaselines.delete(event.payload.threadId);
+      }
+      return;
+    }
     if (event.type === "thread.turn-start-requested" || event.type === "thread.message-sent") {
       if (event.type === "thread.turn-start-requested") pending.add(event.payload.threadId);
       yield* ensurePreTurnBaselineFromDomainTurnStart(event);
@@ -881,6 +940,7 @@ const make = Effect.gen(function* () {
   ) {
     if (event.type === "session.exited") {
       startedTurns.delete(event.threadId);
+      turnBaselines.delete(event.threadId);
       pending.delete(event.threadId);
       return;
     }
@@ -926,6 +986,12 @@ const make = Effect.gen(function* () {
         return;
       }
       yield* captureCheckpointFromTurnCompletion(event).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (turnBaselines.get(event.threadId)?.turnId === turnId)
+              turnBaselines.delete(event.threadId);
+          }),
+        ),
         Effect.catch((error) =>
           Effect.flatMap(nowIso, (createdAt) =>
             appendCaptureFailureActivity({
@@ -948,7 +1014,13 @@ const make = Effect.gen(function* () {
     CheckpointStoreError | OrchestrationDispatchError | PlatformError.PlatformError,
     never
   > =>
-    input.source === "domain" ? processDomainEvent(input.event) : processRuntimeEvent(input.event);
+    input.source === "prepare"
+      ? captureTurnBaseline(input.threadId, input.createdAt).pipe(
+          Effect.ensuring(Deferred.succeed(input.done, undefined)),
+        )
+      : input.source === "domain"
+        ? processDomainEvent(input.event)
+        : processRuntimeEvent(input.event);
 
   const processInputSafely = (input: ReactorInput) =>
     processInput(input).pipe(
@@ -958,7 +1030,7 @@ const make = Effect.gen(function* () {
         }
         return Effect.logWarning("checkpoint reactor failed to process input", {
           source: input.source,
-          eventType: input.event.type,
+          eventType: input.source === "prepare" ? "prepare-turn" : input.event.type,
           cause: Cause.pretty(cause),
         });
       }),
@@ -972,6 +1044,7 @@ const make = Effect.gen(function* () {
         if (
           event.type !== "thread.turn-start-requested" &&
           event.type !== "thread.message-sent" &&
+          event.type !== "thread.session-set" &&
           event.type !== "thread.checkpoint-revert-requested"
         ) {
           return Effect.void;
@@ -996,6 +1069,11 @@ const make = Effect.gen(function* () {
   });
 
   return {
+    prepareTurn: Effect.fn("CheckpointReactor.prepareTurn")(function* (threadId, createdAt) {
+      const done = yield* Deferred.make<void>();
+      yield* worker.enqueue({ source: "prepare", threadId, createdAt, done });
+      yield* Deferred.await(done);
+    }),
     start,
     drain: worker.drain.pipe(Effect.andThen(statusRefreshWorker.drain)),
   } satisfies CheckpointReactorShape;

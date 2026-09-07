@@ -36,6 +36,7 @@ import { it as effectIt } from "@effect/vitest";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import * as CheckpointStore from "../../checkpointing/CheckpointStore.ts";
+import * as CheckpointDiffQuery from "../../checkpointing/CheckpointDiffQuery.ts";
 import * as VcsDriverRegistry from "../../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../../vcs/VcsProcess.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
@@ -166,6 +167,7 @@ function createProviderServiceHarness(
 
   return {
     service,
+    session,
     ensureSession,
     assertConversationRollbackSupported,
     rollbackConversation,
@@ -316,6 +318,7 @@ describe("CheckpointReactor", () => {
     readonly threadWorktreePath?: string | null;
     readonly threadBranch?: string | null;
     readonly secondThreadSharingWorktree?: boolean;
+    readonly secondThreadWorktreePath?: string;
     readonly localStatusRefName?: string | null;
     readonly providerSessionCwd?: string;
     readonly providerName?: ProviderDriverKind;
@@ -492,7 +495,8 @@ describe("CheckpointReactor", () => {
                   interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
                   runtimeMode: "approval-required",
                   branch: null,
-                  worktreePath: options?.threadWorktreePath ?? cwd,
+                  worktreePath:
+                    options?.secondThreadWorktreePath ?? options?.threadWorktreePath ?? cwd,
                   createdAt,
                 }),
               )
@@ -531,11 +535,171 @@ describe("CheckpointReactor", () => {
       cwd,
       workspaceCwd,
       drain,
+      prepareTurn: (threadId: ThreadId) =>
+        runtime!.runPromise(reactor.prepareTurn(threadId, createdAt)),
       runPromise: runtime.runPromise,
       nextReceipt: Queue.take(receipts),
       pullRequestRefreshes,
     };
   }
+
+  effectIt.effect.each([false, true])(
+    "excludes between-turn edits from the summary and patch (agent edits: %s)",
+    (agentEdits) =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() =>
+          createHarness({ seedFilesystemCheckpoints: false }),
+        );
+        const threadId = ThreadId.make("thread-1");
+        const emit = (type: "turn.started" | "turn.completed", turn: number) =>
+          harness.provider.emit({
+            type,
+            eventId: EventId.make(`${type}-${turn}`),
+            provider: ProviderDriverKind.make("codex"),
+            threadId,
+            turnId: `turn-${turn}`,
+            createdAt: `2026-01-01T00:00:0${turn}.000Z`,
+            ...(type === "turn.completed" ? { payload: { state: "completed" } } : {}),
+          });
+        yield* Effect.promise(() => harness.prepareTurn(threadId));
+        emit("turn.started", 1);
+        yield* Effect.promise(harness.drain);
+        NodeFS.writeFileSync(NodePath.join(harness.cwd, "README.md"), "first turn\n");
+        // Steering an active turn must not replace its original baseline.
+        yield* Effect.promise(() => harness.prepareTurn(threadId));
+        emit("turn.completed", 1);
+        yield* Effect.promise(harness.drain);
+        const previousRef = checkpointRefForThreadTurn(threadId, 1);
+        const previousOid = runGit(harness.cwd, ["rev-parse", previousRef]);
+
+        NodeFS.writeFileSync(NodePath.join(harness.cwd, "manual.txt"), "between turns\n");
+        yield* Effect.promise(() => harness.prepareTurn(threadId));
+        // A fast provider can edit before its turn.started notification arrives.
+        if (agentEdits)
+          NodeFS.writeFileSync(NodePath.join(harness.cwd, "README.md"), "second turn\n");
+        emit("turn.started", 2);
+        yield* Effect.promise(harness.drain);
+        emit("turn.completed", 2);
+        yield* Effect.promise(harness.drain);
+
+        const thread = (yield* Effect.promise(harness.readModel)).threads[0]!;
+        expect(thread.checkpoints[0]?.files).toEqual([
+          { path: "README.md", kind: "modified", additions: 1, deletions: 1 },
+        ]);
+        expect(thread.checkpoints[1]?.files).toEqual(
+          agentEdits ? [{ path: "README.md", kind: "modified", additions: 1, deletions: 1 }] : [],
+        );
+        const query = yield* Effect.promise(() => harness.runPromise(CheckpointDiffQuery.make));
+        const result = yield* query.getTurnDiff({ threadId, fromTurnCount: 1, toTurnCount: 2 });
+        expect(result.diff).not.toContain("manual.txt");
+        if (agentEdits) expect(result.diff).toContain("+second turn");
+        else expect(result.diff).toBe("");
+        expect(runGit(harness.cwd, ["rev-parse", previousRef])).toBe(previousOid);
+      }),
+  );
+
+  effectIt.effect(
+    "preserves restore checkpoints but rejects ambiguous diffs for overlapping turns",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() =>
+          createHarness({ seedFilesystemCheckpoints: false, secondThreadSharingWorktree: true }),
+        );
+        const first = ThreadId.make("thread-1");
+        const second = ThreadId.make("thread-2");
+        const emit = (threadId: ThreadId, type: "turn.started" | "turn.completed") =>
+          harness.provider.emit({
+            type,
+            eventId: EventId.make(`${type}-${threadId}`),
+            provider: ProviderDriverKind.make("codex"),
+            threadId,
+            turnId: `${threadId}-turn`,
+            createdAt: "2026-01-01T00:00:01.000Z",
+            ...(type === "turn.completed" ? { payload: { state: "completed" } } : {}),
+          });
+        yield* Effect.promise(() => harness.prepareTurn(first));
+        emit(first, "turn.started");
+        yield* Effect.promise(harness.drain);
+        NodeFS.writeFileSync(NodePath.join(harness.cwd, "README.md"), "first edit\n");
+        yield* Effect.promise(() => harness.prepareTurn(second));
+        emit(second, "turn.started");
+        yield* Effect.promise(harness.drain);
+        NodeFS.writeFileSync(NodePath.join(harness.cwd, "README.md"), "overlapping edit\n");
+        emit(first, "turn.completed");
+        emit(second, "turn.completed");
+        yield* Effect.promise(harness.drain);
+        const query = yield* Effect.promise(() => harness.runPromise(CheckpointDiffQuery.make));
+        for (const threadId of [first, second]) {
+          const thread = (yield* Effect.promise(harness.readModel)).threads.find(
+            (entry) => entry.id === threadId,
+          );
+          expect(thread?.activities).toContainEqual(
+            expect.objectContaining({
+              kind: "checkpoint.diff.unavailable",
+              tone: "error",
+            }),
+          );
+          expect(
+            gitShowFileAtRef(harness.cwd, checkpointRefForThreadTurn(threadId, 1), "README.md"),
+          ).toBe("overlapping edit\n");
+          const result = yield* query
+            .getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 1 })
+            .pipe(Effect.result);
+          expect(result).toMatchObject({
+            _tag: "Failure",
+            failure: { detail: expect.stringContaining("Turn diff unavailable") },
+          });
+        }
+      }),
+  );
+
+  effectIt.effect("keeps concurrent turns in separate workspaces independently attributable", () =>
+    Effect.gen(function* () {
+      const secondCwd = createGitRepository();
+      tempDirs.push(secondCwd);
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          seedFilesystemCheckpoints: false,
+          secondThreadSharingWorktree: true,
+          secondThreadWorktreePath: secondCwd,
+        }),
+      );
+      const emit = (threadId: ThreadId, type: "turn.started" | "turn.completed") =>
+        harness.provider.emit({
+          type,
+          eventId: EventId.make(`${type}-${threadId}`),
+          provider: ProviderDriverKind.make("codex"),
+          threadId,
+          turnId: `${threadId}-turn`,
+          createdAt: "2026-01-01T00:00:01.000Z",
+          ...(type === "turn.completed" ? { payload: { state: "completed" } } : {}),
+        });
+      for (const threadId of [ThreadId.make("thread-1"), ThreadId.make("thread-2")]) {
+        yield* Effect.promise(() => harness.prepareTurn(threadId));
+        emit(threadId, "turn.started");
+        yield* Effect.promise(harness.drain);
+      }
+      NodeFS.writeFileSync(NodePath.join(harness.cwd, "README.md"), "first workspace\n");
+      NodeFS.writeFileSync(NodePath.join(secondCwd, "README.md"), "second workspace\n");
+      emit(ThreadId.make("thread-1"), "turn.completed");
+      emit(ThreadId.make("thread-2"), "turn.completed");
+      yield* Effect.promise(harness.drain);
+      const query = yield* Effect.promise(() => harness.runPromise(CheckpointDiffQuery.make));
+      const first = yield* query.getFullThreadDiff({
+        threadId: ThreadId.make("thread-1"),
+        toTurnCount: 1,
+      });
+      const second = yield* query.getTurnDiff({
+        threadId: ThreadId.make("thread-2"),
+        fromTurnCount: 0,
+        toTurnCount: 1,
+      });
+      expect(first.diff).toContain("+first workspace");
+      expect(first.diff).not.toContain("second workspace");
+      expect(second.diff).toContain("+second workspace");
+      expect(second.diff).not.toContain("first workspace");
+    }),
+  );
 
   it("captures checkpoints when the project cwd is nested below the Git root", async () => {
     const harness = await createHarness({
@@ -1345,7 +1509,7 @@ describe("CheckpointReactor", () => {
       yield* Effect.promise(harness.drain);
       const thread = (yield* Effect.promise(harness.readModel)).threads[0];
       expect(thread?.checkpoints[0]).toMatchObject({
-        status: "ready",
+        status: "error",
         checkpointTurnCount: 1,
         files: [],
       });
@@ -1668,6 +1832,8 @@ describe("CheckpointReactor", () => {
       payload: { state: "completed" },
     });
 
+    await harness.drain();
+    harness.provider.session.cwd = harness.cwd;
     harness.provider.emit({
       type: "turn.started",
       eventId: EventId.make("evt-turn-started-after-runtime-failure"),

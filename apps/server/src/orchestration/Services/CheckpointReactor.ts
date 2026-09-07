@@ -9,11 +9,14 @@
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
+import type { ThreadId } from "@t3tools/contracts";
 
 /**
  * CheckpointReactorShape - Service API for checkpoint reactor lifecycle.
  */
 export interface CheckpointReactorShape {
+  /** Capture the starting workspace before handing a new turn to its provider. */
+  readonly prepareTurn: (threadId: ThreadId, createdAt: string) => Effect.Effect<void>;
   /**
    * Start the checkpoint reactor.
    *

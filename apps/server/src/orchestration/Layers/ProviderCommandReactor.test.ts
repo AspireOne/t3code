@@ -66,6 +66,7 @@ import {
 } from "./ProviderCommandReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
+import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Clock from "effect/Clock";
@@ -176,6 +177,7 @@ describe("ProviderCommandReactor", () => {
     readonly threadTitleInstructions?: string;
     readonly serverActivation?: Effect.Effect<void>;
     readonly beforeReadySessionDispatch?: () => Effect.Effect<void>;
+    readonly prepareTurnEffect?: Effect.Effect<void>;
     readonly compactThreadEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
     readonly interruptTurnEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
     readonly stopSessionEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
@@ -448,6 +450,11 @@ describe("ProviderCommandReactor", () => {
       }),
     ).pipe(Layer.provide(orchestrationLayer));
     const layer = ProviderCommandReactorLive.pipe(
+      Layer.provide(
+        Layer.mock(CheckpointReactor)({
+          prepareTurn: () => input?.prepareTurnEffect ?? Effect.void,
+        }),
+      ),
       Layer.provideMerge(reactorOrchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
       Layer.provideMerge(Layer.succeed(ProviderService, service)),
@@ -832,6 +839,41 @@ describe("ProviderCommandReactor", () => {
           input: text,
           ...(attachments.length > 0 ? { attachments } : {}),
         }),
+      );
+    }),
+  );
+
+  effectIt.effect("waits for the workspace baseline before the provider can edit files", () =>
+    Effect.gen(function* () {
+      const capturing = yield* Deferred.make<void>();
+      const captured = yield* Deferred.make<void>();
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          prepareTurnEffect: Deferred.succeed(capturing, undefined).pipe(
+            Effect.andThen(Deferred.await(captured)),
+          ),
+        }),
+      );
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("baseline-before-provider"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: MessageId.make("baseline-before-provider"),
+          role: "user",
+          text: "edit the file",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      });
+      yield* Deferred.await(capturing);
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      yield* Deferred.succeed(captured, undefined);
+      yield* Effect.promise(harness.drain);
+      expect(harness.sendTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ input: "edit the file" }),
       );
     }),
   );

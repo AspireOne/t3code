@@ -25,6 +25,8 @@ import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 export interface CaptureCheckpointInput {
   readonly cwd: string;
   readonly checkpointRef: CheckpointRef;
+  /** Undefined for legacy snapshots; null when turn attribution is unavailable. */
+  readonly turnBaselineCheckpointRef?: CheckpointRef | null;
 }
 
 export interface RestoreCheckpointInput {
@@ -40,6 +42,7 @@ export interface DiffCheckpointsInput {
   readonly fallbackFromToHead?: boolean;
   readonly ignoreWhitespace: boolean;
   readonly format?: "patch" | "numstat";
+  readonly useTurnBaseline?: boolean;
 }
 
 export interface DeleteCheckpointRefsInput {

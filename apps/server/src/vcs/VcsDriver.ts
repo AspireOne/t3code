@@ -17,6 +17,7 @@ import * as VcsProcess from "./VcsProcess.ts";
 export interface VcsCaptureCheckpointInput {
   readonly cwd: string;
   readonly checkpointRef: CheckpointRef;
+  readonly turnBaselineCheckpointRef?: CheckpointRef | null;
 }
 
 export interface VcsRestoreCheckpointInput {
@@ -32,6 +33,7 @@ export interface VcsDiffCheckpointsInput {
   readonly fallbackFromToHead?: boolean;
   readonly ignoreWhitespace: boolean;
   readonly format?: "patch" | "numstat";
+  readonly useTurnBaseline?: boolean;
 }
 
 export interface VcsDeleteCheckpointRefsInput {

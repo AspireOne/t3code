@@ -72,6 +72,12 @@ uses the project's instructions and recent commit subjects.
 
 ## Review and merge
 
+Open a completed turn's changes to review edits made during that turn. Edits made between
+turns are excluded. When agent turns overlap in the same workspace, their individual diffs
+are unavailable because the edits cannot be attributed reliably; restore checkpoints are still
+saved. Use separate worktrees when running agents concurrently. Manual edits made during a
+turn remain part of its workspace changes.
+
 Open **Pull requests** to review changes and comments, request reviewers, check out a branch,
 or merge. You can edit review titles and descriptions and your own comments where the host allows it.
 GitLab calls these merge requests.
