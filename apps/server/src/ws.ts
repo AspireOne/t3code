@@ -82,6 +82,7 @@ import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as CheckpointStore from "./checkpointing/CheckpointStore.ts";
 import { checkpointRefForThreadTurn } from "./checkpointing/Utils.ts";
+import { selectForkSource } from "./orchestration/threadFork.ts";
 import { forkAttachmentForThread, resolveAttachmentPath } from "./attachmentStore.ts";
 import * as ServerConfig from "./config.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
@@ -1219,9 +1220,21 @@ const makeWsRpcLayer = (
           return yield* dispatchFromClient(command);
         }
 
-        const sourceSnapshot = yield* projectionSnapshotQuery.getThreadDetailSnapshot(
-          command.sourceThreadId,
-        );
+        const forkContext =
+          command.throughTurnId === undefined
+            ? Option.none()
+            : yield* projectionSnapshotQuery.getThreadForkContext(
+                command.sourceThreadId,
+                command.throughTurnId,
+              );
+        if (command.throughTurnId !== undefined && Option.isNone(forkContext)) {
+          return yield* new OrchestrationDispatchCommandError({
+            message: "The selected turn is unavailable or has not finished and cannot be forked.",
+          });
+        }
+        const sourceSnapshot = Option.isSome(forkContext)
+          ? Option.some({ thread: forkContext.value.source })
+          : yield* projectionSnapshotQuery.getThreadDetailSnapshot(command.sourceThreadId);
         const checkpointContext = yield* projectionSnapshotQuery.getThreadCheckpointContext(
           command.sourceThreadId,
         );
@@ -1230,13 +1243,49 @@ const makeWsRpcLayer = (
             message: "The source thread is unavailable and cannot be forked.",
           });
         }
-        const source = sourceSnapshot.value.thread;
-        const latestTurn = source.latestTurn;
-        if (latestTurn === null || latestTurn.completedAt === null) {
+        const sourceSnapshotThread = sourceSnapshot.value.thread;
+        const source = selectForkSource(
+          sourceSnapshotThread,
+          Option.isSome(forkContext) ? forkContext.value.historySelection : undefined,
+        );
+        const latestTurn = Option.isSome(forkContext)
+          ? forkContext.value.latestTurn
+          : source.latestTurn;
+        if (
+          source.latestTurn === null ||
+          source.latestTurn.completedAt === null ||
+          latestTurn === null
+        ) {
           return yield* new OrchestrationDispatchCommandError({
             message: "Wait for the source thread to finish before forking it.",
           });
         }
+        if (
+          source.latestTurn.state === "running" ||
+          source.session?.status === "running" ||
+          source.session?.status === "starting" ||
+          source.queuedMessages.length > 0 ||
+          source.pendingTurnStart !== null
+        ) {
+          return yield* new OrchestrationDispatchCommandError({
+            message: "Wait for the source thread's pending work to finish before forking it.",
+          });
+        }
+        const expectedSourceTurnId = source.latestTurn.turnId;
+        const sourceShell = yield* projectionSnapshotQuery.getThreadShellById(source.id);
+        if (
+          Option.isSome(sourceShell) &&
+          (sourceShell.value.hasPendingApprovals || sourceShell.value.hasPendingUserInput)
+        ) {
+          return yield* new OrchestrationDispatchCommandError({
+            message: "Resolve the source thread's pending requests before forking it.",
+          });
+        }
+        yield* Effect.logInfo("preparing thread fork", {
+          sourceThreadId: source.id,
+          threadId: command.threadId,
+          throughTurnId: latestTurn.turnId,
+        });
         const cwd = source.worktreePath ?? checkpointContext.value.workspaceRoot;
         const copiedAttachmentPaths: string[] = [];
         const copiedCheckpointRefs: Array<ReturnType<typeof checkpointRefForThreadTurn>> = [];
@@ -1362,8 +1411,14 @@ const makeWsRpcLayer = (
           });
           return yield* dispatchFromClient({
             ...command,
-            expectedSourceTurnId: latestTurn.turnId,
+            expectedSourceTurnId,
             expectedSourceUpdatedAt: source.updatedAt,
+            preparedFork: Option.isSome(forkContext)
+              ? {
+                  latestTurn: forkContext.value.latestTurn,
+                  historySelection: forkContext.value.historySelection,
+                }
+              : undefined,
           }).pipe(
             Effect.catchCause((cause) =>
               cleanup.pipe(

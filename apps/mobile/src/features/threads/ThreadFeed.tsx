@@ -253,6 +253,8 @@ export interface ThreadFeedProps {
   readonly onEndFollowEnabledChange?: (enabled: boolean) => void;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
+  readonly onForkThroughTurn?: (turnId: TurnId) => void;
+  readonly forkingTurnId?: TurnId | null;
   /** Non-null when older turns exist beyond the loaded window. */
   readonly loadEarlier?: {
     readonly loading: boolean;
@@ -1323,9 +1325,43 @@ function useMarkdownStyles(
   ]);
 }
 
+function ForkTurnButton(props: {
+  readonly turnId: TurnId;
+  readonly onFork: (turnId: TurnId) => void;
+  readonly busy: boolean;
+  readonly active: boolean;
+  readonly tintColor: ColorValue;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={props.active ? "Forking thread" : "Fork through this turn"}
+      accessibilityState={{ disabled: props.busy, busy: props.busy }}
+      disabled={props.busy}
+      hitSlop={8}
+      className="size-7 items-center justify-center rounded-lg active:opacity-50"
+      onPress={() => props.onFork(props.turnId)}
+    >
+      {props.active ? (
+        <ActivityIndicator size="small" color={props.tintColor} />
+      ) : (
+        <SymbolView
+          name="arrow.triangle.branch"
+          size={13}
+          tintColor={props.tintColor}
+          type="monochrome"
+        />
+      )}
+    </Pressable>
+  );
+}
+
 function renderFeedEntry(
   info: { item: ThreadFeedEntry; index: number },
-  props: Pick<ThreadFeedProps, "environmentId" | "onUseArtifactTemplate" | "skills"> & {
+  props: Pick<
+    ThreadFeedProps,
+    "environmentId" | "onUseArtifactTemplate" | "skills" | "onForkThroughTurn" | "forkingTurnId"
+  > & {
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
     readonly workRowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
@@ -1358,29 +1394,40 @@ function renderFeedEntry(
 
   if (entry.type === "turn-fold") {
     return (
-      <Pressable
-        accessibilityRole="button"
-        accessibilityState={{ expanded: entry.expanded }}
-        onPress={() => props.onToggleTurnFold(entry.turnId)}
-        hitSlop={4}
-        className="mb-1 min-h-11 flex-row items-center gap-2 border-b border-adaptive-neutral-200-a80-white-a8 px-2"
-        style={{
-          minHeight: Math.max(TURN_FOLD_HEIGHT - 3.5, props.workRowSizing.estimatedRowHeight),
-        }}
-      >
-        <Text
-          key={props.workRowSizing.textSizeKey}
-          className="font-t3-medium text-sm tabular-nums text-foreground-muted"
+      <View className="flex-row items-center">
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ expanded: entry.expanded }}
+          onPress={() => props.onToggleTurnFold(entry.turnId)}
+          hitSlop={4}
+          className="mb-1 min-h-11 flex-1 flex-row items-center gap-2 border-b border-adaptive-neutral-200-a80-white-a8 px-2"
+          style={{
+            minHeight: Math.max(TURN_FOLD_HEIGHT - 3.5, props.workRowSizing.estimatedRowHeight),
+          }}
         >
-          {entry.label}
-        </Text>
-        <ThreadDisclosureChevron
-          expanded={entry.expanded}
-          collapsedDirection="right"
-          size={15}
-          tintColor={iconSubtleColor}
-        />
-      </Pressable>
+          <Text
+            key={props.workRowSizing.textSizeKey}
+            className="font-t3-medium text-sm tabular-nums text-foreground-muted"
+          >
+            {entry.label}
+          </Text>
+          <ThreadDisclosureChevron
+            expanded={entry.expanded}
+            collapsedDirection="right"
+            size={15}
+            tintColor={iconSubtleColor}
+          />
+        </Pressable>
+        {props.onForkThroughTurn && (
+          <ForkTurnButton
+            turnId={entry.turnId}
+            onFork={props.onForkThroughTurn}
+            busy={props.forkingTurnId != null}
+            active={props.forkingTurnId === entry.turnId}
+            tintColor={iconSubtleColor}
+          />
+        )}
+      </View>
     );
   }
 
@@ -1593,6 +1640,15 @@ function renderFeedEntry(
         })}
         {showAssistantMeta ? (
           <View className="mt-1 flex-row items-center gap-1">
+            {message.turnId && props.onForkThroughTurn && (
+              <ForkTurnButton
+                turnId={message.turnId}
+                onFork={props.onForkThroughTurn}
+                busy={props.forkingTurnId != null}
+                active={props.forkingTurnId === message.turnId}
+                tintColor={iconSubtleColor}
+              />
+            )}
             <CopyTextButton
               accessibilityLabel="Copy message"
               text={renderedText}
@@ -2680,6 +2736,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             markdownContentWidth,
             skills: props.skills,
             onUseArtifactTemplate: props.onUseArtifactTemplate,
+            onForkThroughTurn: props.onForkThroughTurn,
+            forkingTurnId: props.forkingTurnId,
           })}
         </ThreadMediaVisibility>
       </Animated.View>
@@ -2710,6 +2768,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       onToggleWorkRow,
       props.environmentId,
       props.onUseArtifactTemplate,
+      props.onForkThroughTurn,
+      props.forkingTurnId,
       props.skills,
       renderMarkdownImage,
       renderViewedImage,

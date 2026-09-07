@@ -72,7 +72,16 @@ example `/feedback The agent stopped before finishing the tests`. This uploads
 the conversation and Codex logs to OpenAI. The returned thread ID can be shared
 with OpenAI support.
 
-Use `/fork` or **Fork thread** in the thread menu to branch a settled Codex
-conversation through its latest completed turn. The fork resumes independently
-with copied checkpoints. Forking is unavailable while work or queued messages
-are pending.
+## Fork a conversation
+
+Use **Fork through this turn** beside a completed response or its collapsed work
+summary to branch from that point on web, desktop, or mobile. The fork includes
+the selected prompt and response, earlier history, attachments, and checkpoints.
+On web and desktop, `/fork` or **Fork thread** in the thread menu branches through
+the latest completed turn.
+
+The new conversation resumes independently. Both threads use the same workspace;
+forking does not restore files to their state at the selected turn. Forking is
+unavailable while work, queued messages, or requests are pending. If turn forking
+is absent, update the server. If Codex cannot honor the selected turn, update Codex
+and try again.

@@ -8,7 +8,7 @@ import {
   type EnvironmentThreadStatus,
   mergeEnvironmentThread,
 } from "@t3tools/client-runtime/state/threads";
-import { hasQueuedTurnStart } from "@t3tools/client-runtime/state/thread-settled";
+import { canForkThread } from "@t3tools/client-runtime/thread-fork";
 import type { ScopedProjectRef, ScopedThreadRef, ServerConfig } from "@t3tools/contracts";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
@@ -242,21 +242,22 @@ export function readEnvironmentProviderDriver(
   );
 }
 
-/** Forking is intentionally Codex-only in v1 and only starts from a settled turn tip. */
-export function readThreadCanFork(ref: ScopedThreadRef): boolean {
+export function readThreadCanFork(
+  ref: ScopedThreadRef,
+  fromTurn = false,
+  pendingWork?: {
+    readonly queuedMessageCount: number;
+    readonly hasPendingTurnStart: boolean;
+  },
+): boolean {
   const thread = readThreadShell(ref);
-  if (!thread || !readEnvironmentSupportsThreadForking(ref.environmentId)) return false;
-  const instanceId = thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
-  const driver = readEnvironmentProviderDriver(ref.environmentId, instanceId);
-  const sessionIsActive =
-    thread.session?.status === "starting" || thread.session?.status === "running";
   return (
-    driver === "codex" &&
-    thread.latestTurn?.completedAt != null &&
-    !sessionIsActive &&
-    !thread.hasPendingApprovals &&
-    !thread.hasPendingUserInput &&
-    !hasQueuedTurnStart(thread, { now: new Date().toISOString() })
+    thread !== null &&
+    canForkThread(
+      thread,
+      appAtomRegistry.get(environmentServerConfigsAtom).get(ref.environmentId),
+      { fromTurn, now: new Date().toISOString(), ...pendingWork },
+    )
   );
 }
 

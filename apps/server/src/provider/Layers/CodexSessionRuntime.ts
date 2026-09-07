@@ -801,18 +801,44 @@ export const openCodexThread = (input: {
   });
 
   if (input.fork !== undefined) {
-    const requestFork = input.client.request as unknown as (
-      method: "thread/fork",
-      payload: CodexRpc.ClientRequestParamsByMethod["thread/fork"],
-    ) => Effect.Effect<
-      CodexRpc.ClientRequestResponsesByMethod["thread/fork"],
-      CodexErrors.CodexAppServerError
-    >;
-    return requestFork("thread/fork", {
-      ...startParams,
-      threadId: input.fork.sourceThreadId,
-      lastTurnId: input.fork.lastTurnId,
-      ephemeral: false,
+    const fork = input.fork;
+    const requestFork = input.client.request as unknown as <
+      M extends "thread/fork" | "thread/delete",
+    >(
+      method: M,
+      payload: CodexRpc.ClientRequestParamsByMethod[M],
+    ) => Effect.Effect<CodexRpc.ClientRequestResponsesByMethod[M], CodexErrors.CodexAppServerError>;
+    return Effect.gen(function* () {
+      const response = yield* requestFork("thread/fork", {
+        ...startParams,
+        threadId: fork.sourceThreadId,
+        lastTurnId: fork.lastTurnId,
+        ephemeral: false,
+      });
+      // Older app servers may silently ignore an unknown lastTurnId field.
+      // Never bind a full-history fork to a truncated T3 conversation.
+      if (
+        response.thread.id === fork.sourceThreadId ||
+        response.thread.turns.at(-1)?.id !== fork.lastTurnId
+      ) {
+        if (response.thread.id !== fork.sourceThreadId) {
+          yield* requestFork("thread/delete", { threadId: response.thread.id }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("failed to discard a Codex fork with an incorrect turn boundary", {
+                threadId: response.thread.id,
+                cause,
+              }),
+            ),
+          );
+        }
+        return yield* new CodexErrors.CodexAppServerRequestError({
+          code: -32603,
+          method: "thread/fork",
+          errorMessage:
+            "Codex did not return an independent fork ending at the selected turn. Update Codex and try again.",
+        });
+      }
+      return response;
     });
   }
 

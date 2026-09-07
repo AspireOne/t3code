@@ -411,6 +411,21 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: "A thread with pending work cannot be forked.",
         });
       }
+      const prepared = command.throughTurnId === undefined ? undefined : command.preparedFork;
+      if (
+        command.throughTurnId !== undefined &&
+        (prepared === undefined ||
+          prepared.latestTurn.turnId !== command.throughTurnId ||
+          prepared.latestTurn.completedAt === null ||
+          prepared.latestTurn.state === "running" ||
+          !prepared.historySelection.turnIds.includes(command.throughTurnId))
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "The selected turn is unavailable or has not finished and cannot be forked.",
+        });
+      }
+      const latestTurn = prepared?.latestTurn ?? source.latestTurn;
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -429,8 +444,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           interactionMode: source.interactionMode,
           branch: source.branch,
           worktreePath: source.worktreePath,
-          forkedThroughTurnId: source.latestTurn.turnId,
-          latestTurn: source.latestTurn,
+          forkedThroughTurnId: latestTurn.turnId,
+          latestTurn,
+          ...(prepared === undefined ? {} : { historySelection: prepared.historySelection }),
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },

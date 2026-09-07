@@ -807,6 +807,9 @@ function ThreadRouteContent(
           projectWorkspaceRoot={selectedThreadProject?.workspaceRoot ?? null}
           threadCwd={selectedThreadCwd}
           selectedThreadQueueCount={composer.selectedThreadQueueCount}
+          selectedThreadHasPendingTurnStart={
+            selectedThreadDetail !== null && selectedThreadDetail.pendingTurnStart !== null
+          }
           queuedMessages={composer.selectedThreadServerQueuedMessages}
           layoutVariant={layout.variant}
           usesAutomaticContentInsets={usesNativeHeaderGlass}

@@ -904,16 +904,33 @@ const ThreadCreateCommand = Schema.Struct({
   historyImport: Schema.optional(Schema.Literal(true)),
 });
 
+// Freeze the selected history before copying provider and filesystem resources.
+// Explicit IDs keep null-turn messages and replay aligned with that selection.
+export const ThreadForkHistorySelection = Schema.Struct({
+  turnIds: Schema.Array(TurnId),
+  messageIds: Schema.Array(MessageId),
+  proposedPlanIds: Schema.Array(OrchestrationProposedPlanId),
+  activityIds: Schema.Array(EventId),
+});
+export type ThreadForkHistorySelection = typeof ThreadForkHistorySelection.Type;
+
 const ThreadForkCommand = Schema.Struct({
   type: Schema.Literal("thread.fork"),
   commandId: CommandId,
   sourceThreadId: ThreadId,
+  throughTurnId: Schema.optional(TurnId),
   threadId: ThreadId,
   createdAt: IsoDateTime,
   // Filled by the server before durable dispatch. The decider uses it as an
   // optimistic fence around the provider/resource side effects.
   expectedSourceTurnId: Schema.optional(TurnId),
   expectedSourceUpdatedAt: Schema.optional(IsoDateTime),
+  preparedFork: Schema.optional(
+    Schema.Struct({
+      latestTurn: OrchestrationLatestTurn,
+      historySelection: ThreadForkHistorySelection,
+    }),
+  ),
 });
 
 const ThreadDeleteCommand = Schema.Struct({
@@ -1518,6 +1535,7 @@ export const ThreadForkedPayload = Schema.Struct({
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   forkedThroughTurnId: TurnId,
   latestTurn: OrchestrationLatestTurn,
+  historySelection: Schema.optional(ThreadForkHistorySelection),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });

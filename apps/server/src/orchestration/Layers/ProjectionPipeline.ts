@@ -63,7 +63,7 @@ import {
   toSafeThreadAttachmentSegment,
 } from "../../attachmentStore.ts";
 import { checkpointRefForThreadTurn } from "../../checkpointing/Utils.ts";
-import { forkedEntityId } from "../threadFork.ts";
+import { forkedEntityId, forkedPlanImplementation } from "../threadFork.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",
@@ -667,6 +667,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             pendingUserInputCount: 0,
             deletedAt: null,
           });
+          yield* refreshThreadShellSummary(event.payload.threadId);
           return;
         }
 
@@ -1122,8 +1123,14 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           const sourceRows = yield* projectionThreadMessageRepository.listByThreadId({
             threadId: event.payload.sourceThreadId,
           });
+          const selectedIds =
+            event.payload.historySelection === undefined
+              ? null
+              : new Set(event.payload.historySelection.messageIds);
           yield* Effect.forEach(
-            sourceRows,
+            sourceRows.filter(
+              (message) => selectedIds === null || selectedIds.has(message.messageId),
+            ),
             (message) => {
               const attachments = message.attachments?.map((attachment) =>
                 forkAttachmentForThread(attachment, event.payload.threadId),
@@ -1256,8 +1263,12 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           const sourceRows = yield* projectionThreadProposedPlanRepository.listByThreadId({
             threadId: event.payload.sourceThreadId,
           });
+          const selectedIds =
+            event.payload.historySelection === undefined
+              ? null
+              : new Set(event.payload.historySelection.proposedPlanIds);
           yield* Effect.forEach(
-            sourceRows,
+            sourceRows.filter((plan) => selectedIds === null || selectedIds.has(plan.planId)),
             (plan) =>
               projectionThreadProposedPlanRepository.upsert({
                 ...plan,
@@ -1267,10 +1278,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
                   plan.planId,
                 ) as OrchestrationProposedPlanId,
                 threadId: event.payload.threadId,
-                implementationThreadId:
-                  plan.implementationThreadId === event.payload.sourceThreadId
-                    ? event.payload.threadId
-                    : plan.implementationThreadId,
+                ...forkedPlanImplementation(plan, event),
               }),
             { concurrency: 1 },
           );
@@ -1341,8 +1349,14 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           const sourceRows = yield* projectionThreadActivityRepository.listByThreadId({
             threadId: event.payload.sourceThreadId,
           });
+          const selectedIds =
+            event.payload.historySelection === undefined
+              ? null
+              : new Set(event.payload.historySelection.activityIds);
           yield* Effect.forEach(
-            sourceRows,
+            sourceRows.filter(
+              (activity) => selectedIds === null || selectedIds.has(activity.activityId),
+            ),
             (activity) =>
               projectionThreadActivityRepository.upsert({
                 ...activity,
@@ -1446,8 +1460,15 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           const sourceRows = yield* projectionTurnRepository.listByThreadId({
             threadId: event.payload.sourceThreadId,
           });
+          const selectedIds =
+            event.payload.historySelection === undefined
+              ? null
+              : new Set(event.payload.historySelection.turnIds);
           yield* Effect.forEach(
-            sourceRows.filter((turn) => turn.turnId !== null),
+            sourceRows.filter(
+              (turn) =>
+                turn.turnId !== null && (selectedIds === null || selectedIds.has(turn.turnId)),
+            ),
             (turn) => {
               if (turn.turnId === null) return Effect.void;
               return projectionTurnRepository.upsertByTurnId({

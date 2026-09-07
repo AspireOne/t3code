@@ -22,7 +22,6 @@ import type {
   ProviderInteractionMode,
   RuntimeMode,
   ServerConfig as T3ServerConfig,
-  ThreadId,
   UsageLimitsReport,
   UserInputQuestion,
 } from "@t3tools/contracts";
@@ -38,6 +37,7 @@ import {
   useState,
 } from "react";
 import {
+  Alert,
   AppState,
   Keyboard,
   Platform,
@@ -97,6 +97,14 @@ import {
   ThreadComposer,
 } from "./ThreadComposer";
 import { ThreadFeed } from "./ThreadFeed";
+import { canForkThread } from "@t3tools/client-runtime/thread-fork";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { ThreadId, type TurnId } from "@t3tools/contracts";
+import { useNavigation } from "@react-navigation/native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import { uuidv4 } from "../../lib/uuid";
+import { threadEnvironment } from "../../state/threads";
+import { useAtomCommand } from "../../state/use-atom-command";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
 
@@ -128,6 +136,7 @@ export interface ThreadDetailScreenProps {
   readonly projectWorkspaceRoot: string | null;
   readonly threadCwd: string | null;
   readonly selectedThreadQueueCount: number;
+  readonly selectedThreadHasPendingTurnStart: boolean;
   readonly queuedMessages: ReadonlyArray<OrchestrationQueuedMessage>;
   readonly serverConfig: T3ServerConfig | null;
   readonly layoutVariant?: LayoutVariant;
@@ -243,6 +252,52 @@ const USER_INPUT_TOGGLE_TIMING = {
 };
 
 export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: ThreadDetailScreenProps) {
+  const navigation =
+    useNavigation<NativeStackNavigationProp<ReactNavigation.RootParamList, "Thread">>();
+  const forkThread = useAtomCommand(threadEnvironment.fork, { reportFailure: false });
+  const [forkingTurnId, setForkingTurnId] = useState<TurnId | null>(null);
+  const forkInFlight = useRef(false);
+  const forkAvailable =
+    canForkThread(props.selectedThread, props.serverConfig, {
+      fromTurn: true,
+      now: new Date().toISOString(),
+      queuedMessageCount: props.selectedThreadQueueCount,
+      hasPendingTurnStart: props.selectedThreadHasPendingTurnStart,
+    }) &&
+    !props.isCompacting &&
+    props.connectionStateLabel === "connected";
+  const onForkThroughTurn = useCallback(
+    (throughTurnId: TurnId) => {
+      if (forkInFlight.current || !forkAvailable) return;
+      forkInFlight.current = true;
+      setForkingTurnId(throughTurnId);
+      const threadId = ThreadId.make(uuidv4());
+      void forkThread({
+        environmentId: props.environmentId,
+        input: {
+          sourceThreadId: props.selectedThread.id,
+          threadId,
+          throughTurnId,
+        },
+      })
+        .then((result) => {
+          if (result._tag === "Failure") {
+            const error = squashAtomCommandFailure(result);
+            Alert.alert(
+              "Could not fork thread",
+              error instanceof Error ? error.message : "Try again.",
+            );
+            return;
+          }
+          navigation.push("Thread", { environmentId: props.environmentId, threadId });
+        })
+        .finally(() => {
+          forkInFlight.current = false;
+          setForkingTurnId(null);
+        });
+    },
+    [forkAvailable, forkThread, navigation, props.environmentId, props.selectedThread.id],
+  );
   const insets = useSafeAreaInsets();
   const isKeyboardVisible = useKeyboardState((state) => state.isVisible);
   const liveKeyboardHeight = useKeyboardState((state) => state.height);
@@ -822,6 +877,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             onEndFollowEnabledChange={setEndFollowEnabled}
             skills={selectedProviderSkills}
             onUseArtifactTemplate={handleUseArtifactTemplate}
+            onForkThroughTurn={forkAvailable ? onForkThroughTurn : undefined}
+            forkingTurnId={forkingTurnId}
             loadEarlier={props.loadEarlier ?? null}
           />
         </View>

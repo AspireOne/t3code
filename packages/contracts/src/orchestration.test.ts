@@ -521,6 +521,22 @@ it.effect("decodes a thread fork with distinct source and target ids", () =>
   }),
 );
 
+it.effect("preserves an explicit historical turn when decoding a fork command", () =>
+  Effect.gen(function* () {
+    const command = yield* decodeClientOrchestrationCommand({
+      type: "thread.fork",
+      commandId: "selected-fork",
+      sourceThreadId: "source",
+      threadId: "target",
+      throughTurnId: "historical-turn",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.equal(command.type, "thread.fork");
+    if (command.type !== "thread.fork") throw new Error("Expected fork command");
+    assert.equal(command.throughTurnId, "historical-turn");
+  }),
+);
+
 it.effect("decodes the durable thread fork event with its exact source revision", () =>
   Effect.gen(function* () {
     const forked = yield* decodeOrchestrationEvent({

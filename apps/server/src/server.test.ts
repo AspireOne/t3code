@@ -9885,6 +9885,206 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("forks the selected native turn and copies only its retained resources", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-selected-fork-rpc-" });
+      const paths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
+      const sourceThreadId = ThreadId.make("selected-source");
+      const targetThreadId = ThreadId.make("selected-target");
+      const selectedTurnId = TurnId.make("turn-2");
+      const latestTurnId = TurnId.make("turn-3");
+      const keptAttachment = {
+        type: "file" as const,
+        id: "selected-source-00000000-0000-4000-8000-000000000001-txt",
+        name: "kept.txt",
+        mimeType: "text/plain",
+        sizeBytes: 4,
+      };
+      const excludedAttachment = {
+        ...keptAttachment,
+        id: "selected-source-00000000-0000-4000-8000-000000000002-txt",
+        name: "later.txt",
+      };
+      const sourcePath = resolveAttachmentPath({
+        attachmentsDir: paths.attachmentsDir,
+        attachment: keptAttachment,
+      });
+      assert.ok(sourcePath);
+      yield* fs.makeDirectory(path.dirname(sourcePath), { recursive: true });
+      yield* fs.writeFileString(sourcePath, "kept");
+      const now = "2026-01-01T00:00:00.000Z";
+      const source = {
+        ...makeDefaultOrchestrationReadModel().threads[0]!,
+        id: sourceThreadId,
+        pendingTurnStart: null,
+        latestTurn: {
+          turnId: latestTurnId,
+          state: "completed" as const,
+          requestedAt: now,
+          startedAt: now,
+          completedAt: now,
+          assistantMessageId: null,
+        },
+        messages: [
+          {
+            id: MessageId.make("selected-message"),
+            role: "user" as const,
+            text: "selected",
+            turnId: null,
+            attachments: [keptAttachment],
+            streaming: false,
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: MessageId.make("later-message"),
+            role: "user" as const,
+            text: "later",
+            turnId: null,
+            attachments: [excludedAttachment],
+            streaming: false,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        checkpoints: [1, 2, 3].map((n) => ({
+          turnId: TurnId.make(`turn-${n}`),
+          checkpointTurnCount: n,
+          checkpointRef: checkpointRefForThreadTurn(sourceThreadId, n),
+          status: "ready" as const,
+          files: [],
+          assistantMessageId: null,
+          completedAt: now,
+        })),
+      };
+      const prepared = {
+        latestTurn: { ...source.latestTurn, turnId: selectedTurnId },
+        historySelection: {
+          turnIds: [TurnId.make("turn-1"), selectedTurnId],
+          messageIds: [MessageId.make("selected-message")],
+          proposedPlanIds: [],
+          activityIds: [],
+        },
+      };
+      const copiedRefs: string[] = [];
+      let nativeTurnId: TurnId | undefined;
+      let dispatched: OrchestrationCommand | undefined;
+      yield* buildAppUnderTest({
+        config: { ...paths },
+        layers: {
+          projectionSnapshotQuery: {
+            getThreadShellById: () => Effect.succeed(Option.none()),
+            getThreadForkContext: (threadId, throughTurnId) => {
+              assert.equal(threadId, sourceThreadId);
+              assert.equal(throughTurnId, selectedTurnId);
+              return Effect.succeed(Option.some({ source, ...prepared }));
+            },
+            getThreadCheckpointContext: () =>
+              Effect.succeed(
+                Option.some({
+                  threadId: sourceThreadId,
+                  projectId: defaultProjectId,
+                  workspaceRoot: baseDir,
+                  worktreePath: null,
+                  checkpoints: source.checkpoints,
+                }),
+              ),
+          },
+          checkpointStore: {
+            copyCheckpointRef: ({ sourceCheckpointRef }) =>
+              Effect.sync(() => {
+                copiedRefs.push(sourceCheckpointRef);
+                return sourceCheckpointRef !== checkpointRefForThreadTurn(sourceThreadId, 3);
+              }),
+          },
+          providerService: {
+            forkConversation: (input) =>
+              Effect.sync(() => {
+                nativeTurnId = input.lastTurnId;
+                return {
+                  resumeCursor: { threadId: "native-selected-fork" },
+                  providerInstanceId: ProviderInstanceId.make("codex"),
+                };
+              }),
+          },
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatched = command;
+                return { sequence: 8 };
+              }),
+          },
+        },
+      });
+      const wsUrl = yield* getWsServerUrl("/ws");
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.fork",
+            commandId: CommandId.make("selected-rpc-fork"),
+            sourceThreadId,
+            threadId: targetThreadId,
+            throughTurnId: selectedTurnId,
+            createdAt: now,
+            // Client-provided preparation is never authoritative.
+            preparedFork: { ...prepared, latestTurn: source.latestTurn },
+          }),
+        ),
+      );
+      assert.equal(nativeTurnId, selectedTurnId);
+      assert.deepEqual(copiedRefs, [
+        checkpointRefForThreadTurn(sourceThreadId, 0),
+        checkpointRefForThreadTurn(sourceThreadId, 1),
+        checkpointRefForThreadTurn(sourceThreadId, 2),
+      ]);
+      assert.equal(dispatched?.type, "thread.fork");
+      if (dispatched?.type !== "thread.fork") throw new Error("Expected fork dispatch");
+      assert.equal(dispatched.expectedSourceTurnId, latestTurnId);
+      assert.deepEqual(dispatched.preparedFork, prepared);
+      const targetPath = resolveAttachmentPath({
+        attachmentsDir: paths.attachmentsDir,
+        attachment: {
+          ...keptAttachment,
+          id: keptAttachment.id.replace("selected-source", "selected-target"),
+        },
+      });
+      assert.ok(targetPath);
+      assert.equal(yield* fs.readFileString(targetPath), "kept");
+      assert.equal(yield* fs.readFileString(sourcePath), "kept");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects an unavailable selected turn before copying resources or forking Codex", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getThreadShellById: () => Effect.succeed(Option.none()),
+            getThreadForkContext: () => Effect.succeed(Option.none()),
+            getThreadDetailSnapshot: () => Effect.die("Must not fall back to the latest turn"),
+          },
+          providerService: { forkConversation: () => Effect.die("Must not fork an invalid turn") },
+        },
+      });
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const error = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.fork",
+            commandId: CommandId.make("invalid-selected-fork"),
+            sourceThreadId: ThreadId.make("source"),
+            threadId: ThreadId.make("target"),
+            throughTurnId: TurnId.make("unavailable"),
+            createdAt: "2026-01-01T00:00:00.000Z",
+          }),
+        ),
+      ).pipe(Effect.flip);
+      assert.match(error.message, /selected turn is unavailable/);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("copies the baseline and checkpoints from the fenced source snapshot", () =>
     Effect.gen(function* () {
       const sourceThreadId = ThreadId.make("thread-fork-source-checkpoints");

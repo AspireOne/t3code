@@ -13,6 +13,7 @@ import type {
   MessageId,
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
+  OrchestrationLatestTurn,
   OrchestrationProject,
   OrchestrationProjectShell,
   OrchestrationReadModel,
@@ -26,6 +27,8 @@ import type {
   OrchestrationThreadShell,
   ProjectId,
   ThreadId,
+  ThreadForkHistorySelection,
+  TurnId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Option from "effect/Option";
@@ -77,6 +80,18 @@ export interface ProjectionThreadDetailQuery {
  * ProjectionSnapshotQueryShape - Service API for read-model snapshots.
  */
 export interface ProjectionSnapshotQueryShape {
+  /** Resolve a historical fork against durable history in one consistent read. */
+  readonly getThreadForkContext: (
+    threadId: ThreadId,
+    throughTurnId: TurnId,
+  ) => Effect.Effect<
+    Option.Option<{
+      readonly source: OrchestrationThread;
+      readonly latestTurn: OrchestrationLatestTurn;
+      readonly historySelection: ThreadForkHistorySelection;
+    }>,
+    ProjectionRepositoryError
+  >;
   /** Read the latest request or resolution without loading the thread history. */
   readonly getUserInputActivity: (input: {
     readonly threadId: ThreadId;

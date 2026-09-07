@@ -6,7 +6,7 @@ import {
 } from "@t3tools/client-runtime/environment";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { canSnooze, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
-import { EnvironmentId, type ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, type ScopedThreadRef, ThreadId, type TurnId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/unstable/reactivity";
@@ -503,10 +503,10 @@ export function useThreadActions() {
   );
 
   const forkThread = useCallback(
-    async (target: ScopedThreadRef) => {
+    async (target: ScopedThreadRef, throughTurnId?: TurnId) => {
       const thread = readThreadShell(target);
       if (!thread) return AsyncResult.success(undefined);
-      if (!readThreadCanFork(target)) {
+      if (!readThreadCanFork(target, throughTurnId !== undefined)) {
         return AsyncResult.failure(
           Cause.fail(new Error("Only idle Codex threads with a completed turn can be forked.")),
         );
@@ -517,6 +517,7 @@ export function useThreadActions() {
         input: {
           sourceThreadId: target.threadId,
           threadId: targetThreadId,
+          ...(throughTurnId === undefined ? {} : { throughTurnId }),
         },
       });
       if (result._tag === "Failure") return result;

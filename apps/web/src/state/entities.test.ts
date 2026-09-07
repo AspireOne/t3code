@@ -54,11 +54,21 @@ function makeForkableShell(
   };
 }
 
-function mockForkState(shell: EnvironmentThreadShell, options?: { capability?: boolean }) {
+function mockForkState(
+  shell: EnvironmentThreadShell,
+  options?: { capability?: boolean; fromTurnCapability?: boolean; driver?: string },
+) {
   const threadAtom = environmentThreadShells.threadShellAtom(threadRef);
   const config = {
-    environment: { capabilities: { threadForking: options?.capability ?? true } },
-    providers: [{ instanceId: ProviderInstanceId.make("codex-custom"), driver: "codex" }],
+    environment: {
+      capabilities: {
+        threadForking: options?.capability ?? true,
+        threadForkingFromTurn: options?.fromTurnCapability,
+      },
+    },
+    providers: [
+      { instanceId: ProviderInstanceId.make("codex-custom"), driver: options?.driver ?? "codex" },
+    ],
   } as unknown as ServerConfig;
   vi.spyOn(appAtomRegistry, "get").mockImplementation(((atom: unknown) => {
     if (atom === environmentServerConfigsAtom) {
@@ -99,6 +109,19 @@ describe("resolveThreadDetailRef", () => {
 });
 
 describe("readThreadCanFork", () => {
+  it("keeps latest-turn forking available on an older server while blocking a selected turn", () => {
+    mockForkState(makeForkableShell());
+    expect(readThreadCanFork(threadRef)).toBe(true);
+    expect(readThreadCanFork(threadRef, true)).toBe(false);
+  });
+
+  it("allows selected-turn forking only for a supported provider and server", () => {
+    mockForkState(makeForkableShell(), { fromTurnCapability: true });
+    expect(readThreadCanFork(threadRef, true)).toBe(true);
+    mockForkState(makeForkableShell(), { fromTurnCapability: true, driver: "claude" });
+    expect(readThreadCanFork(threadRef, true)).toBe(false);
+  });
+
   it("allows only a completed idle Codex thread on a capable environment", () => {
     mockForkState(makeForkableShell());
     expect(readThreadCanFork(threadRef)).toBe(true);
@@ -146,5 +169,22 @@ describe("readThreadCanFork", () => {
     );
 
     expect(readThreadCanFork(threadRef)).toBe(false);
+  });
+
+  it("blocks durable queued and pending turn-start work", () => {
+    mockForkState(makeForkableShell(), { fromTurnCapability: true });
+
+    expect(
+      readThreadCanFork(threadRef, true, {
+        queuedMessageCount: 1,
+        hasPendingTurnStart: false,
+      }),
+    ).toBe(false);
+    expect(
+      readThreadCanFork(threadRef, true, {
+        queuedMessageCount: 0,
+        hasPendingTurnStart: true,
+      }),
+    ).toBe(false);
   });
 });
