@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useEffectEvent, useMemo } from "react";
+import { AppState } from "react-native";
+import { startReviewDiffRefresh } from "@t3tools/client-runtime/state/review";
 
 import type { EnvironmentId, OrchestrationCheckpointSummary, ThreadId } from "@t3tools/contracts";
 
@@ -86,6 +88,28 @@ export function useReviewSections(input: {
       null,
     [reviewCache.selectedSectionId, reviewSections],
   );
+  const isGitDiffPending = useEffectEvent(() => diffPreview.isPending);
+  const refreshGitDiff = diffPreview.refresh;
+  const showingGitDiff =
+    enabled &&
+    selectedSection?.kind !== "turn" &&
+    environmentId !== undefined &&
+    selectedThreadCwd !== null;
+  useEffect(() => {
+    if (!showingGitDiff) return;
+    const refresh = startReviewDiffRefresh({
+      active: AppState.currentState === "active",
+      refresh: refreshGitDiff,
+      isPending: () => isGitDiffPending(),
+    });
+    const subscription = AppState.addEventListener("change", (state) =>
+      refresh.setActive(state === "active"),
+    );
+    return () => {
+      subscription.remove();
+      refresh.dispose();
+    };
+  }, [showingGitDiff, refreshGitDiff]);
   const fallbackSectionId = useMemo(
     () => getDefaultReviewSectionId(reviewSections),
     [reviewSections],

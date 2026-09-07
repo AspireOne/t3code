@@ -1,4 +1,5 @@
 import { RefreshIcon } from "~/components/ui/refresh-icon";
+import { startReviewDiffRefresh } from "@t3tools/client-runtime/state/review";
 import { useAtomValue } from "@effect/atom-react";
 import type { FileDiffContentsLoader } from "@pierre/diffs";
 import { useParams } from "@tanstack/react-router";
@@ -23,7 +24,7 @@ import {
   TextWrapIcon,
 } from "lucide-react";
 import * as Schema from "effect/Schema";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { useCodeViewFileReveal } from "./diffs/useCodeViewFileReveal";
 import { useOpenInPreferredEditor } from "../editorPreferences";
 import { type DraftId } from "../composerDraftStore";
@@ -275,11 +276,23 @@ export default function DiffPanel({
     ? `${routeThreadRef.environmentId}:${routeThreadRef.threadId}`
     : null;
 
+  const isGitDiffPending = useEffectEvent(() => branchDiffPreview.isPending);
   useEffect(() => {
     if (!canRefreshGitDiff) return;
-    const refreshOnFocus = () => refreshBranchDiffPreview();
+    const refresh = startReviewDiffRefresh({
+      active: document.visibilityState === "visible",
+      refresh: refreshBranchDiffPreview,
+      isPending: () => isGitDiffPending(),
+    });
+    const refreshOnFocus = () => refresh.requestRefresh();
+    const onVisibilityChange = () => refresh.setActive(document.visibilityState === "visible");
     window.addEventListener("focus", refreshOnFocus);
-    return () => window.removeEventListener("focus", refreshOnFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      refresh.dispose();
+      window.removeEventListener("focus", refreshOnFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, [canRefreshGitDiff, refreshBranchDiffPreview]);
 
   useWorkspaceMutationRefresh({

@@ -7,6 +7,10 @@ import {
   createEnvironmentRpcQueryAtomFamily,
 } from "./runtime.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
+import { vcsRefsCacheStateAtom } from "./vcsRefInvalidation.ts";
+import { REVIEW_DIFF_REFRESH_INTERVAL_MS } from "./reviewRefresh.ts";
+
+export { startReviewDiffRefresh } from "./reviewRefresh.ts";
 
 export function createReviewEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
@@ -16,7 +20,10 @@ export function createReviewEnvironmentAtoms<R, E>(
     diffPreview: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:review:diff-preview",
       tag: WS_METHODS.reviewGetDiffPreview,
-      staleTimeMs: 5_000,
+      staleTimeMs: REVIEW_DIFF_REFRESH_INTERVAL_MS,
+      // Closed previews must stop reacting to later Git actions.
+      idleTtlMs: 0,
+      refreshTrigger: ({ environmentId }) => vcsRefsCacheStateAtom({ environmentId }),
     }),
     diffFileContents: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:review:diff-file-contents",
