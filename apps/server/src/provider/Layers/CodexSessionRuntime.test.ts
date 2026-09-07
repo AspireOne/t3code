@@ -957,7 +957,14 @@ describe("openCodexThread", () => {
   it.effect("forks the native thread through the exact settled turn without fallback", () =>
     Effect.gen(function* () {
       const calls: Array<{ method: string; payload: unknown }> = [];
-      const forked = makeThreadOpenResponse("forked-thread");
+      const base = makeThreadOpenResponse("forked-thread");
+      const forked = {
+        ...base,
+        thread: {
+          ...base.thread,
+          turns: [{ id: "turn-3", status: "completed", items: [], error: null }],
+        },
+      };
       const client = {
         request: (method: string, payload: unknown) => {
           calls.push({ method, payload });
@@ -996,6 +1003,69 @@ describe("openCodexThread", () => {
         },
       ]);
     }),
+  );
+
+  it.effect("discards a fork when Codex ignores the requested historical boundary", () =>
+    Effect.gen(function* () {
+      const calls: Array<{ method: string; payload: unknown }> = [];
+      const base = makeThreadOpenResponse("incorrect-fork");
+      const response = {
+        ...base,
+        thread: {
+          ...base.thread,
+          turns: [
+            { id: "turn-1", items: [], status: "completed" },
+            { id: "turn-2", items: [], status: "completed" },
+          ],
+        },
+      };
+      const error = yield* openCodexThread({
+        client: {
+          request: (method: string, payload: unknown) => {
+            calls.push({ method, payload });
+            return Effect.succeed(method === "thread/delete" ? {} : response);
+          },
+        } as never,
+        threadId: ThreadId.make("target-thread"),
+        runtimeMode: "full-access",
+        cwd: "/tmp/project",
+        requestedModel: undefined,
+        serviceTier: undefined,
+        resumeThreadId: undefined,
+        fork: { sourceThreadId: "source-native-thread", lastTurnId: TurnId.make("turn-1") },
+      }).pipe(Effect.flip);
+      NodeAssert.match(error.message, /ending at the selected turn/);
+      NodeAssert.deepStrictEqual(
+        calls.map((call) => call.method),
+        ["thread/fork", "thread/delete"],
+      );
+      NodeAssert.deepStrictEqual(calls[1]?.payload, { threadId: "incorrect-fork" });
+    }),
+  );
+
+  it.effect(
+    "never deletes the source when Codex returns its ID instead of an independent fork",
+    () =>
+      Effect.gen(function* () {
+        const calls: string[] = [];
+        const response = makeThreadOpenResponse("source-native-thread");
+        yield* openCodexThread({
+          client: {
+            request: (method: string) => {
+              calls.push(method);
+              return Effect.succeed(response);
+            },
+          } as never,
+          threadId: ThreadId.make("target-thread"),
+          runtimeMode: "full-access",
+          cwd: "/tmp/project",
+          requestedModel: undefined,
+          serviceTier: undefined,
+          resumeThreadId: undefined,
+          fork: { sourceThreadId: "source-native-thread", lastTurnId: TurnId.make("turn-1") },
+        }).pipe(Effect.flip);
+        NodeAssert.deepStrictEqual(calls, ["thread/fork"]);
+      }),
   );
 
   it.effect("resumes metadata when historical turns contain unknown error values", () =>

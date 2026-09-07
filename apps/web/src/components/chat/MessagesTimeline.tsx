@@ -88,6 +88,7 @@ import {
   CircleAlertIcon,
   DownloadIcon,
   EyeIcon,
+  GitForkIcon,
   GlobeIcon,
   HammerIcon,
   MessageCircleIcon,
@@ -193,6 +194,7 @@ import {
 // ---------------------------------------------------------------------------
 
 interface TimelineRowSharedState {
+  onForkThroughTurn: ((turnId: TurnId) => void) | undefined;
   citationRequest: AssistantCitationTarget | null;
   listRef: React.RefObject<LegendListRef | null>;
   timestampFormat: TimestampFormat;
@@ -218,6 +220,7 @@ interface TimelineRowSharedState {
 }
 
 interface TimelineRowActivityState {
+  isForkingThread: boolean;
   isWorking: boolean;
   isPreparingWorktree: boolean;
   isCompacting: boolean;
@@ -317,6 +320,8 @@ interface MessagesTimelineProps {
   supportsConversationRollback: boolean;
   onRevertToTurnCount: (targetTurnCount: number) => void;
   onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
+  onForkThroughTurn?: ((turnId: TurnId) => void) | undefined;
+  isForkingThread?: boolean;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onFileOpen?: (attachment: ChatFileAttachment) => void;
@@ -374,6 +379,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onOpenTurnDiff,
   supportsConversationRollback,
   onRevertToTurnCount,
+  onForkThroughTurn,
+  isForkingThread = false,
   onUseArtifactTemplate = NOOP_USE_ARTIFACT_TEMPLATE,
   isRevertingCheckpoint,
   onImageExpand,
@@ -718,6 +725,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
   const sharedState = useMemo<TimelineRowSharedState>(
     () => ({
+      onForkThroughTurn,
       citationRequest: readyCitationRequest,
       listRef,
       timestampFormat,
@@ -743,6 +751,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onOpenAgents,
     }),
     [
+      onForkThroughTurn,
       readyCitationRequest,
       listRef,
       timestampFormat,
@@ -769,13 +778,21 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   );
   const activityState = useMemo<TimelineRowActivityState>(
     () => ({
+      isForkingThread,
       isWorking,
       isPreparingWorktree,
       isCompacting,
       isRevertingCheckpoint,
       latestTurnId: latestTurn?.turnId ?? null,
     }),
-    [isCompacting, isRevertingCheckpoint, isWorking, isPreparingWorktree, latestTurn?.turnId],
+    [
+      isForkingThread,
+      isCompacting,
+      isRevertingCheckpoint,
+      isWorking,
+      isPreparingWorktree,
+      latestTurn?.turnId,
+    ],
   );
 
   // Stable renderItem — no closure deps. Row components read shared state
@@ -1536,12 +1553,44 @@ function RevertUserMessageButton({ turnCount }: { turnCount: number }) {
   );
 }
 
+function ForkTurnButton({ turnId }: { turnId: TurnId | null | undefined }) {
+  const ctx = use(TimelineRowCtx);
+  const activity = use(TimelineRowActivityCtx);
+  if (!turnId || !ctx.onForkThroughTurn) return null;
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            disabled={
+              activity.isForkingThread ||
+              activity.isWorking ||
+              activity.isCompacting ||
+              activity.isRevertingCheckpoint
+            }
+            onClick={() => ctx.onForkThroughTurn?.(turnId)}
+            aria-label="Fork through this turn"
+          />
+        }
+      >
+        <GitForkIcon className="size-3" />
+      </TooltipTrigger>
+      <TooltipPopup side="top">
+        {activity.isForkingThread ? "Forking thread…" : "Fork through this turn"}
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
 function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-fold" }> }) {
   const ctx = use(TimelineRowCtx);
   const Icon = row.expanded ? ChevronDownIcon : ChevronRightIcon;
 
   return (
-    <div className="border-b border-border/60 pb-2 pt-1">
+    <div className="flex items-center gap-1 border-b border-border/60 pb-2 pt-1">
       <button
         type="button"
         aria-expanded={row.expanded}
@@ -1552,6 +1601,7 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
         <span>{row.label}</span>
         <Icon className="size-3.5" />
       </button>
+      <ForkTurnButton turnId={row.turnId} />
     </div>
   );
 }
@@ -1648,6 +1698,7 @@ function AssistantMessageMeta({
         showCopyButton={showCopyButton}
         streaming={copyStreaming}
       />
+      {showCopyButton && !copyStreaming && <ForkTurnButton turnId={message.turnId} />}
       {!message.streaming && (
         <Tooltip>
           <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>
@@ -1700,6 +1751,7 @@ function ProposedPlanTimelineRow({
         cwd={ctx.markdownCwd}
         workspaceRoot={ctx.workspaceRoot}
       />
+      <ForkTurnButton turnId={row.proposedPlan.turnId} />
     </div>
   );
 }

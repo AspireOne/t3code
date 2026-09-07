@@ -59,6 +59,11 @@ import { ProjectionThreadProposedPlan } from "../../persistence/Services/Project
 import { ProjectionQueuedMessage } from "../../persistence/Services/ProjectionQueuedMessages.ts";
 import { ProjectionThreadSession } from "../../persistence/Services/ProjectionThreadSessions.ts";
 import { ProjectionThread } from "../../persistence/Services/ProjectionThreads.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
+import { ProjectionThreadActivityRepository } from "../../persistence/Services/ProjectionThreadActivities.ts";
+import { ProjectionThreadActivityRepositoryLive } from "../../persistence/Layers/ProjectionThreadActivities.ts";
+import { selectThreadForkHistory } from "../threadFork.ts";
 import {
   decodeThreadDetailPageCursor,
   encodeThreadDetailPageCursor,
@@ -461,6 +466,8 @@ function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: st
 }
 
 const makeProjectionSnapshotQuery = Effect.gen(function* () {
+  const forkTurns = yield* ProjectionTurnRepository;
+  const forkActivities = yield* ProjectionThreadActivityRepository;
   const threadBackgroundLiveness = yield* ThreadBackgroundLivenessService;
   const threadPlanProgress = yield* ThreadPlanProgressService;
   const sql = yield* SqlClient.SqlClient;
@@ -3640,7 +3647,37 @@ pending_approval_requests AS (
         ),
       );
 
+  const getThreadForkContext: ProjectionSnapshotQueryShape["getThreadForkContext"] = Effect.fn(
+    "ProjectionSnapshotQuery.getThreadForkContext",
+  )(function* (threadId, throughTurnId) {
+    return yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const snapshot = yield* getThreadDetailById(threadId, { activityKinds: [] });
+          if (Option.isNone(snapshot)) return Option.none();
+          const turns = yield* forkTurns.listByThreadId({ threadId });
+          const activities = yield* forkActivities.listByThreadId({ threadId });
+          const source = {
+            ...snapshot.value,
+            activities: activities.map((activity) => ({ ...activity, id: activity.activityId })),
+          };
+          const prepared = selectThreadForkHistory(source, turns, throughTurnId);
+          return prepared === null ? Option.none() : Option.some({ source, ...prepared });
+        }),
+      )
+      .pipe(
+        Effect.mapError((error) =>
+          isPersistenceError(error)
+            ? error
+            : toPersistenceSqlError("ProjectionSnapshotQuery.getThreadForkContext:transaction")(
+                error,
+              ),
+        ),
+      );
+  });
+
   return {
+    getThreadForkContext,
     getCommandReadModel,
     getUserInputActivity,
     getSnapshot,
@@ -3667,4 +3704,4 @@ pending_approval_requests AS (
 export const OrchestrationProjectionSnapshotQueryLive = Layer.effect(
   ProjectionSnapshotQuery,
   makeProjectionSnapshotQuery,
-);
+).pipe(Layer.provide([ProjectionTurnRepositoryLive, ProjectionThreadActivityRepositoryLive]));

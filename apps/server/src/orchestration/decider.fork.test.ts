@@ -93,6 +93,56 @@ function makeReadModel(source = makeSource()): OrchestrationReadModel {
 }
 
 it.layer(NodeServices.layer)("thread fork decider and projector", (it) => {
+  it.effect(
+    "requires a prepared selection for a historical fork and retains the latest source fence",
+    () =>
+      Effect.gen(function* () {
+        const selectedTurnId = TurnId.make("older-turn");
+        const preparedFork = {
+          latestTurn: { ...makeSource().latestTurn!, turnId: selectedTurnId },
+          historySelection: {
+            turnIds: [selectedTurnId],
+            messageIds: [],
+            proposedPlanIds: [],
+            activityIds: [],
+          },
+        };
+        const command = {
+          type: "thread.fork" as const,
+          commandId: CommandId.make("selected-fork"),
+          sourceThreadId: SOURCE_ID,
+          threadId: TARGET_ID,
+          createdAt: NOW,
+          throughTurnId: selectedTurnId,
+          expectedSourceTurnId: TURN_ID,
+          expectedSourceUpdatedAt: NOW,
+        };
+        const missing = yield* decideOrchestrationCommand({
+          command,
+          readModel: makeReadModel(),
+        }).pipe(Effect.flip);
+        expect(missing.message).toContain("selected turn is unavailable");
+        const stale = yield* decideOrchestrationCommand({
+          command: { ...command, preparedFork, expectedSourceTurnId: selectedTurnId },
+          readModel: makeReadModel(),
+        }).pipe(Effect.flip);
+        expect(stale.message).toContain("changed while the fork was being prepared");
+        const decided = yield* decideOrchestrationCommand({
+          command: { ...command, preparedFork },
+          readModel: makeReadModel(),
+        });
+        const event = Array.isArray(decided) ? decided[0] : decided;
+        expect(event).toMatchObject({
+          type: "thread.forked",
+          payload: {
+            forkedThroughTurnId: selectedTurnId,
+            latestTurn: preparedFork.latestTurn,
+            historySelection: preparedFork.historySelection,
+          },
+        });
+      }),
+  );
+
   it.effect("creates an independent target through the latest settled turn", () =>
     Effect.gen(function* () {
       const decided = yield* decideOrchestrationCommand({

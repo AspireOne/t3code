@@ -123,6 +123,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadTitleRegeneration: Schema.optionalKey(Schema.Boolean),
   /** Server supports provider-native thread forking. Missing means unsupported. */
   threadForking: Schema.optionalKey(Schema.Boolean),
+  /** Server can fork through an explicitly selected historical turn. */
+  threadForkingFromTurn: Schema.optionalKey(Schema.Boolean),
   /** Server persists a pull request reference on thread.meta.update. */
   threadPullRequestLinking: Schema.optionalKey(Schema.Boolean),
   /** The update path clients should offer for this server. Absent on

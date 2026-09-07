@@ -1431,6 +1431,32 @@ export default function ChatView(props: ChatViewProps) {
     [environmentId, threadId],
   );
   const routeThreadKey = useMemo(() => scopedThreadKey(routeThreadRef), [routeThreadRef]);
+  const [isForkingThread, setIsForkingThread] = useState(false);
+  const forkInFlight = useRef(false);
+  const onForkThroughTurn = useCallback(
+    async (turnId: TurnId) => {
+      if (forkInFlight.current) return;
+      forkInFlight.current = true;
+      setIsForkingThread(true);
+      try {
+        const result = await forkThread(routeThreadRef, turnId);
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not fork thread",
+              description: error instanceof Error ? error.message : "Try again.",
+            }),
+          );
+        }
+      } finally {
+        forkInFlight.current = false;
+        setIsForkingThread(false);
+      }
+    },
+    [forkThread, routeThreadRef],
+  );
   const updateProjectScriptSettings = useAtomCommand(serverEnvironment.updateSettings, {
     reportFailure: false,
   });
@@ -8353,6 +8379,12 @@ export default function ChatView(props: ChatViewProps) {
                 onOpenTurnDiff={onOpenTurnDiff}
                 supportsConversationRollback={supportsConversationRollback}
                 onRevertToTurnCount={onRevertTimelineTurn}
+                onForkThroughTurn={
+                  routeKind === "server" && readThreadCanFork(routeThreadRef, true)
+                    ? onForkThroughTurn
+                    : undefined
+                }
+                isForkingThread={isForkingThread}
                 onUseArtifactTemplate={useArtifactTemplate}
                 isRevertingCheckpoint={isRevertingCheckpoint}
                 onImageExpand={onExpandTimelineImage}
