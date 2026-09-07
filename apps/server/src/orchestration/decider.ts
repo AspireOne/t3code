@@ -1255,6 +1255,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           readModel,
         });
       }
+      if (
+        command.message.attachments.length === 0 &&
+        command.message.text.trim().toLowerCase() === "/compact"
+      ) {
+        // Native compaction need not produce the turn completion that drains
+        // follow-ups. Keep it on the immediate-send path above.
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail:
+            "Context compaction cannot be queued. Wait for pending work to finish, then send /compact.",
+        });
+      }
       if (targetThread.queuedMessages.length >= MAX_QUEUED_MESSAGES) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,

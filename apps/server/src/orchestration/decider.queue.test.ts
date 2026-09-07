@@ -231,6 +231,66 @@ it.layer(NodeServices.layer)("queue turn decider", (it) => {
     }),
   );
 
+  for (const text of ["/compact", "  /COMPACT  "]) {
+    it.effect(`rejects queued compaction commands: ${JSON.stringify(text)}`, () =>
+      Effect.gen(function* () {
+        const readModel = yield* projectEvent(yield* seedReadModel, sessionEvent("running", 3));
+        const command = queueCommand("compact");
+        const error = yield* decideOrchestrationCommand({
+          command: { ...command, message: { ...command.message, text } },
+          readModel,
+        }).pipe(Effect.flip);
+        expect(error).toMatchObject({
+          _tag: "OrchestrationCommandInvariantError",
+          detail:
+            "Context compaction cannot be queued. Wait for pending work to finish, then send /compact.",
+        });
+      }),
+    );
+  }
+
+  it.effect("starts compaction immediately when the thread became idle before queueing", () =>
+    Effect.gen(function* () {
+      const command = queueCommand("compact-idle");
+      const planned = yield* decideOrchestrationCommand({
+        command: { ...command, message: { ...command.message, text: "/compact" } },
+        readModel: yield* seedReadModel,
+      });
+      const events = Array.isArray(planned) ? planned : [planned];
+      expect(events.map((event) => event.type)).toEqual([
+        "thread.message-sent",
+        "thread.turn-start-requested",
+      ]);
+    }),
+  );
+
+  it.effect("treats /compact with attachments as an ordinary queued prompt", () =>
+    Effect.gen(function* () {
+      const command = queueCommand("compact-attachment");
+      const planned = yield* decideOrchestrationCommand({
+        command: {
+          ...command,
+          message: {
+            ...command.message,
+            text: "/compact",
+            attachments: [
+              {
+                type: "image",
+                id: "thread-queue-00000000-0000-4000-8000-000000000001",
+                name: "image.png",
+                mimeType: "image/png",
+                sizeBytes: 10,
+              },
+            ],
+          },
+        },
+        readModel: yield* projectEvent(yield* seedReadModel, sessionEvent("running", 3)),
+      });
+      const events = Array.isArray(planned) ? planned : [planned];
+      expect(events.map((event) => event.type)).toEqual(["thread.message-queued"]);
+    }),
+  );
+
   it.effect("keeps a new message behind an existing queue during completion races", () =>
     Effect.gen(function* () {
       let readModel = yield* seedReadModel;

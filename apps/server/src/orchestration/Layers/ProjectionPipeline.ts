@@ -2125,9 +2125,12 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           const messages = yield* projectionThreadMessageRepository.listByThreadId({
             threadId: ThreadId.make(threadId),
           });
+          const queuedMessages = yield* projectionQueuedMessageRepository.listByThreadId({
+            threadId: ThreadId.make(threadId),
+          });
           prunedThreadRelativePaths.set(
             threadId,
-            collectThreadAttachmentRelativePaths(threadId, messages),
+            collectThreadAttachmentRelativePaths(threadId, [...messages, ...queuedMessages]),
           );
         }
 

@@ -108,6 +108,7 @@ Provider commands must start the message to run. T3 Code commands such as
 
 Send `/compact` in an existing conversation to reduce context usage when the
 provider supports it. Web and desktop also offer compaction from the context meter.
+Compaction cannot be queued; wait for pending work to finish before sending it.
 
 ## Images and videos in messages
 

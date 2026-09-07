@@ -1043,6 +1043,93 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
   );
 });
 
+it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-queued-attachments-")))(
+  "queued attachment cleanup",
+  (it) => {
+    it.effect("removing one queued message preserves other queued attachments", () =>
+      Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const { attachmentsDir } = yield* ServerConfig;
+        const threadId = ThreadId.make("queued-attachments");
+        const now = "2026-01-01T00:00:00.000Z";
+        const eventFields = {
+          aggregateKind: "thread" as const,
+          aggregateId: threadId,
+          occurredAt: now,
+          commandId: null,
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+        };
+        const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
+          eventStore.append(event).pipe(Effect.flatMap(projectionPipeline.projectEvent));
+        yield* appendAndProject({
+          ...eventFields,
+          type: "thread.created",
+          eventId: EventId.make("queued-attachments-created"),
+          payload: {
+            threadId,
+            projectId: ProjectId.make("project-queued-attachments"),
+            title: "Queued attachments",
+            modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+        yield* fileSystem.makeDirectory(attachmentsDir, { recursive: true });
+        const attachmentPaths: string[] = [];
+        for (const index of [1, 2]) {
+          const attachmentId = `queued-attachments-00000000-0000-4000-8000-00000000000${index}`;
+          const attachmentPath = path.join(attachmentsDir, `${attachmentId}.png`);
+          attachmentPaths.push(attachmentPath);
+          yield* fileSystem.writeFileString(attachmentPath, `attachment ${index}`);
+          yield* appendAndProject({
+            ...eventFields,
+            type: "thread.message-queued",
+            eventId: EventId.make(`queue-${index}`),
+            payload: {
+              threadId,
+              messageId: MessageId.make(`queued-${index}`),
+              text: `Follow-up ${index}`,
+              attachments: [
+                {
+                  type: "image",
+                  id: attachmentId,
+                  name: `${index}.png`,
+                  mimeType: "image/png",
+                  sizeBytes: 12,
+                },
+              ],
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              queuedAt: now,
+            },
+          });
+        }
+        yield* appendAndProject({
+          ...eventFields,
+          type: "thread.queued-message-removed",
+          eventId: EventId.make("remove-first-queued"),
+          payload: {
+            threadId,
+            messageId: MessageId.make("queued-1"),
+            reason: "user",
+            removedAt: now,
+          },
+        });
+        assert.isFalse(yield* exists(attachmentPaths[0]!));
+        assert.equal(yield* fileSystem.readFileString(attachmentPaths[1]!), "attachment 2");
+      }),
+    );
+  },
+);
+
 it.layer(
   Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-attachments-overwrite-")),
 )("OrchestrationProjectionPipeline", (it) => {
@@ -1563,6 +1650,9 @@ it.layer(
       const laterAttachmentId = "thread-revert-files-00000000-0000-4000-8000-000000000005";
       const laterPath = path.join(attachmentsDir, `${laterAttachmentId}.png`);
       yield* fileSystem.writeFileString(laterPath, "added after revert");
+      const queuedAttachmentId = "thread-revert-files-00000000-0000-4000-8000-000000000006";
+      const queuedPath = path.join(attachmentsDir, `${queuedAttachmentId}.png`);
+      yield* fileSystem.writeFileString(queuedPath, "queued after revert");
       const cleanup = yield* sql.withTransaction(
         Effect.gen(function* () {
           const cleanup = yield* projectionPipeline.projectEventDeferred(revertedEvent);
@@ -1596,6 +1686,34 @@ it.layer(
               updatedAt: now,
             },
           });
+          yield* appendAndProject({
+            type: "thread.message-queued",
+            eventId: EventId.make("evt-revert-files-queued"),
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: now,
+            commandId: null,
+            causationEventId: null,
+            correlationId: null,
+            metadata: {},
+            payload: {
+              threadId,
+              messageId: MessageId.make("message-queued-after-revert"),
+              text: "Queued attachment",
+              attachments: [
+                {
+                  type: "image",
+                  id: queuedAttachmentId,
+                  name: "queued.png",
+                  mimeType: "image/png",
+                  sizeBytes: 19,
+                },
+              ],
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              queuedAt: now,
+            },
+          });
           assert.isTrue(yield* exists(removePath));
           // Return the cleanup effect so the caller runs it after the outer transaction commits.
           // @effect-diagnostics-next-line returnEffectInGen:off
@@ -1609,6 +1727,7 @@ it.layer(
       assert.isTrue(yield* exists(keepFilePath));
       assert.isFalse(yield* exists(removePath));
       assert.isTrue(yield* exists(laterPath));
+      assert.equal(yield* fileSystem.readFileString(queuedPath), "queued after revert");
       assert.isTrue(yield* exists(otherThreadPath));
     }),
   );
