@@ -8380,7 +8380,11 @@ export default function ChatView(props: ChatViewProps) {
                 supportsConversationRollback={supportsConversationRollback}
                 onRevertToTurnCount={onRevertTimelineTurn}
                 onForkThroughTurn={
-                  routeKind === "server" && readThreadCanFork(routeThreadRef, true)
+                  routeKind === "server" &&
+                  readThreadCanFork(routeThreadRef, true, {
+                    queuedMessageCount: activeThread.queuedMessages.length,
+                    hasPendingTurnStart: activeThread.pendingTurnStart !== null,
+                  })
                     ? onForkThroughTurn
                     : undefined
                 }

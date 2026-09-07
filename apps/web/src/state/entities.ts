@@ -242,14 +242,21 @@ export function readEnvironmentProviderDriver(
   );
 }
 
-export function readThreadCanFork(ref: ScopedThreadRef, fromTurn = false): boolean {
+export function readThreadCanFork(
+  ref: ScopedThreadRef,
+  fromTurn = false,
+  pendingWork?: {
+    readonly queuedMessageCount: number;
+    readonly hasPendingTurnStart: boolean;
+  },
+): boolean {
   const thread = readThreadShell(ref);
   return (
     thread !== null &&
     canForkThread(
       thread,
       appAtomRegistry.get(environmentServerConfigsAtom).get(ref.environmentId),
-      { fromTurn, now: new Date().toISOString() },
+      { fromTurn, now: new Date().toISOString(), ...pendingWork },
     )
   );
 }

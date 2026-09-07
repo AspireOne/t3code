@@ -667,6 +667,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             pendingUserInputCount: 0,
             deletedAt: null,
           });
+          yield* refreshThreadShellSummary(event.payload.threadId);
           return;
         }
 

@@ -170,4 +170,21 @@ describe("readThreadCanFork", () => {
 
     expect(readThreadCanFork(threadRef)).toBe(false);
   });
+
+  it("blocks durable queued and pending turn-start work", () => {
+    mockForkState(makeForkableShell(), { fromTurnCapability: true });
+
+    expect(
+      readThreadCanFork(threadRef, true, {
+        queuedMessageCount: 1,
+        hasPendingTurnStart: false,
+      }),
+    ).toBe(false);
+    expect(
+      readThreadCanFork(threadRef, true, {
+        queuedMessageCount: 0,
+        hasPendingTurnStart: true,
+      }),
+    ).toBe(false);
+  });
 });

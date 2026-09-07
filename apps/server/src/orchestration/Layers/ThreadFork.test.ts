@@ -331,6 +331,14 @@ it.layer(testLayer)("selected fork persistence and replay", (it) => {
         assert.deepEqual(thread.latestTurn, memory!.latestTurn);
         assert.equal(thread.latestTurn?.requestedAt, "2026-01-01T00:02:00.000Z");
         assert.equal(thread.session, null);
+        const shell = yield* query.getThreadShellById(targetId);
+        assert.isTrue(Option.isSome(shell));
+        if (Option.isSome(shell)) {
+          assert.equal(shell.value.latestUserMessageAt, "2026-01-01T00:02:00.000Z");
+          assert.isFalse(shell.value.hasPendingApprovals);
+          assert.isFalse(shell.value.hasPendingUserInput);
+          assert.isTrue(shell.value.hasActionableProposedPlan);
+        }
       });
       yield* assertTarget();
       yield* fork(targetId, nestedId, TurnId.make("turn-1"));

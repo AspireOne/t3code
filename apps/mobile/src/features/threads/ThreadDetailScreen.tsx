@@ -136,6 +136,7 @@ export interface ThreadDetailScreenProps {
   readonly projectWorkspaceRoot: string | null;
   readonly threadCwd: string | null;
   readonly selectedThreadQueueCount: number;
+  readonly selectedThreadHasPendingTurnStart: boolean;
   readonly queuedMessages: ReadonlyArray<OrchestrationQueuedMessage>;
   readonly serverConfig: T3ServerConfig | null;
   readonly layoutVariant?: LayoutVariant;
@@ -260,8 +261,9 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     canForkThread(props.selectedThread, props.serverConfig, {
       fromTurn: true,
       now: new Date().toISOString(),
+      queuedMessageCount: props.selectedThreadQueueCount,
+      hasPendingTurnStart: props.selectedThreadHasPendingTurnStart,
     }) &&
-    props.selectedThreadQueueCount === 0 &&
     !props.isCompacting &&
     props.connectionStateLabel === "connected";
   const onForkThroughTurn = useCallback(
