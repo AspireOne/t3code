@@ -1,6 +1,5 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import type { PullRequestDiffSide } from "@t3tools/contracts";
-import type { DiffFileTier } from "~/lib/diffFileOrder";
 
 /**
  * Whether a conversation's line is really in this file's hunks.
@@ -24,13 +23,6 @@ export function isLineInFileDiff(
 
 /** What the toolbar last asked of every file at once, null being the reader asking nothing yet. */
 export type DiffFoldOverride = "expanded" | "folded" | null;
-export type DiffFoldOverridesByTier = Readonly<Record<DiffFileTier, DiffFoldOverride>>;
-
-interface TieredDiffFoldFile {
-  readonly key: string;
-  readonly tier: DiffFileTier;
-  readonly visible: boolean;
-}
 
 /**
  * Whether a file is drawn folded.
@@ -38,44 +30,14 @@ interface TieredDiffFoldFile {
  * A diff arrives a slice at a time, so the reader's own choices are kept as the difference from
  * what the toolbar last said rather than as the set of folded files: a file that has not loaded
  * yet cannot be in a set, and would otherwise land expanded moments after the reader folded
- * everything. Folded is the starting point whatever the change's size, because laying out every
- * file of it costs the reader the seconds before the tab is usable and buries the file they came
- * for among the ones they did not.
+ * everything. Files start expanded so opening the Code tab immediately shows the change; the
+ * reader can still fold individual files or the whole diff from the toolbar.
  */
 export function isFileDiffCollapsed(
   fileKey: string,
   foldOverride: DiffFoldOverride,
   toggledFileKeys: ReadonlySet<string>,
 ): boolean {
-  const foldedByDefault = foldOverride !== "expanded";
+  const foldedByDefault = foldOverride === "folded";
   return toggledFileKeys.has(fileKey) ? !foldedByDefault : foldedByDefault;
-}
-
-export function applyVisibleDiffFoldOverride(input: {
-  readonly override: DiffFoldOverride;
-  readonly shownTiers: ReadonlySet<DiffFileTier>;
-  readonly files: ReadonlyArray<TieredDiffFoldFile>;
-  readonly overridesByTier: DiffFoldOverridesByTier;
-  readonly toggledFileKeys: ReadonlySet<string>;
-}): {
-  readonly overridesByTier: DiffFoldOverridesByTier;
-  readonly toggledFileKeys: ReadonlySet<string>;
-} {
-  const affectedTiers = new Set<DiffFileTier>(["source", ...input.shownTiers]);
-  const overridesByTier = { ...input.overridesByTier };
-  for (const tier of affectedTiers) overridesByTier[tier] = input.override;
-
-  const toggledFileKeys = new Set(input.toggledFileKeys);
-  for (const file of input.files) {
-    if (affectedTiers.has(file.tier)) {
-      toggledFileKeys.delete(file.key);
-      continue;
-    }
-    if (!file.visible) continue;
-    const foldedByDefault = input.overridesByTier[file.tier] !== "expanded";
-    if ((input.override === "folded") === foldedByDefault) toggledFileKeys.delete(file.key);
-    else toggledFileKeys.add(file.key);
-  }
-
-  return { overridesByTier, toggledFileKeys };
 }

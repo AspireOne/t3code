@@ -80,18 +80,7 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-provider-cache-" });
-      const codexProvider = makeProvider(CODEX_DRIVER, {
-        rateLimits: {
-          fetchedAt: "2026-04-11T00:00:00.000Z",
-          windows: [
-            {
-              windowDurationMins: 300,
-              usedPercent: 40,
-              resetsAt: "2026-04-11T05:00:00.000Z",
-            },
-          ],
-        },
-      });
+      const codexProvider = makeProvider(CODEX_DRIVER);
       const claudeProvider = makeProvider(CLAUDE_AGENT_DRIVER, {
         status: "warning",
         auth: { status: "unknown" },
@@ -126,8 +115,7 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
         provider: openCodeProvider,
       });
 
-      const { rateLimits: _rateLimits, ...persistentCodexProvider } = codexProvider;
-      assert.deepStrictEqual(yield* readProviderStatusCache(codexPath), persistentCodexProvider);
+      assert.deepStrictEqual(yield* readProviderStatusCache(codexPath), codexProvider);
       assert.deepStrictEqual(yield* readProviderStatusCache(claudePath), claudeProvider);
       assert.deepStrictEqual(yield* readProviderStatusCache(openCodePath), openCodeProvider);
     }),
@@ -145,16 +133,6 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
         },
       ],
       message: "Cached message",
-      rateLimits: {
-        fetchedAt: "2026-04-10T12:00:00.000Z",
-        windows: [
-          {
-            windowDurationMins: 300,
-            usedPercent: 40,
-            resetsAt: "2026-04-10T17:00:00.000Z",
-          },
-        ],
-      },
       skills: [
         {
           name: "github:gh-fix-ci",
@@ -201,6 +179,35 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
         skills: cachedCodex.skills,
         message: cachedCodex.message,
       },
+    );
+  });
+
+  it("does not resurrect cached custom models that settings no longer declare", () => {
+    const builtIn = {
+      slug: "gpt-5.4",
+      name: "GPT-5.4",
+      isCustom: false,
+      capabilities: emptyCapabilities,
+    } as const;
+    const cachedCodex = makeProvider(CODEX_DRIVER, {
+      models: [
+        builtIn,
+        {
+          slug: "removed-custom",
+          name: "removed-custom",
+          isCustom: true,
+          capabilities: emptyCapabilities,
+        },
+      ],
+    });
+    const fallbackCodex = makeProvider(CODEX_DRIVER, { models: [builtIn] });
+
+    assert.deepStrictEqual(
+      hydrateCachedProvider({
+        cachedProvider: cachedCodex,
+        fallbackProvider: fallbackCodex,
+      }).models,
+      [builtIn],
     );
   });
 

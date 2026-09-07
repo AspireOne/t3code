@@ -1,5 +1,5 @@
 import type { CodeViewItem, DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs";
-import type { CodeViewDiffItem } from "@pierre/diffs/react";
+import type { CodeViewDiffItem, CodeViewHandle } from "@pierre/diffs/react";
 import type {
   EnvironmentId,
   PullRequestDetailView,
@@ -16,6 +16,7 @@ import {
   ChevronsDownUpIcon,
   ChevronsUpDownIcon,
   Columns2Icon,
+  FolderTreeIcon,
   MessageSquareIcon,
   MessageSquareOffIcon,
   Rows3Icon,
@@ -24,16 +25,16 @@ import {
   XIcon,
 } from "lucide-react";
 import { useAtomRefresh } from "@effect/atom-react";
+import * as Schema from "effect/Schema";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
-import { useClientSettings } from "~/hooks/useSettings";
-import { useDiffFocusStore } from "~/diffFocusStore";
+import { useLocalStorage } from "~/hooks/useLocalStorage";
+import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
 import { areAllDiffFilesCollapsed } from "~/lib/diffCollapse";
-import { focusOrderedDiffFiles, type DiffFocusableTier } from "~/lib/diffFileFocus";
 import { pullRequestFindingKey, type PullRequestFinding } from "./pullRequestDetail.logic";
 import { canEditPullRequestComment } from "./pullRequestEditing.logic";
-import { diffFileTier, orderDiffFiles, type DiffFileTier } from "~/lib/diffFileOrder";
+import { orderDiffFiles } from "./pullRequestFileOrder.logic";
 import {
   buildFileDiffRenderKey,
   fnv1a32,
@@ -44,6 +45,7 @@ import {
   resolveFileDiffPreviousPath,
   type RenderablePatch,
 } from "~/lib/diffRendering";
+import { PREFERRED_HIGHLIGHTER } from "~/lib/syntaxHighlighting";
 import { cn } from "~/lib/utils";
 import { createPullRequestDiffFileContentsLoader } from "~/lib/diffFileContents";
 import {
@@ -56,9 +58,10 @@ import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { DiffPanelLoadingState } from "../DiffPanelShell";
-import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
-import { DeferredDiffFiles, DiffFocusMenu } from "../diffs/DiffFocusControls";
+import { DiffFileTree } from "../diffs/DiffFileTree";
+import { useCodeViewFileReveal } from "../diffs/useCodeViewFileReveal";
+import { diffFileTreeEntries } from "../diffs/diffFileTree.logic";
 import { StyledDiffCodeView } from "../diffs/StyledDiffCodeView";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
@@ -74,10 +77,9 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PendingReviewCommentCard, ReviewThreadCard } from "./PullRequestReviewAnnotation";
 import { PullRequestReviewBar } from "./PullRequestReviewBar";
 import {
-  applyVisibleDiffFoldOverride,
   isFileDiffCollapsed,
   isLineInFileDiff,
-  type DiffFoldOverridesByTier,
+  type DiffFoldOverride,
 } from "./pullRequestDiff.logic";
 import { PullRequestDiffStat, PullRequestMetaLine } from "./pullRequestPresentation";
 import {
@@ -99,6 +101,8 @@ type ReviewAnnotation = DiffLineAnnotation<ReviewAnnotationGroup>;
 
 /** Commits per press of "Show more" in the scope menu. */
 const COMMIT_PAGE_SIZE = 10;
+
+const PULL_REQUEST_FILE_TREE_STORAGE_KEY = "t3code.pullRequestFileTreeOpen";
 
 /** One answer from the host: a whole number of files, and where the next one carries on. */
 interface DiffSlice {
@@ -183,7 +187,7 @@ function getReviewPositionAnchor(position: PullRequestReviewPosition): {
  * host sit under the line they were written on, and a new comment joins the review being
  * drafted rather than being posted as it is typed.
  */
-export function PullRequestCodeTab({
+function PullRequestCodeTab({
   environmentId,
   reference,
   detail,
@@ -214,19 +218,20 @@ export function PullRequestCodeTab({
 }) {
   const { resolvedTheme } = useTheme();
   const settings = useClientSettings();
-  const diffFocusPreferences = useDiffFocusStore((state) => state.preferences);
   const [toggledFiles, setToggledFiles] = useState<ReadonlySet<string>>(() => new Set());
   // A change of any size can carry hundreds of commits, and a menu that long is a scroll rather
   // than a choice. The rest arrive ten at a time, on request.
   const [visibleCommitCount, setVisibleCommitCount] = useState(COMMIT_PAGE_SIZE);
   /** Set once the reader has asked for every file at once, until they pick a file apart again. */
-  const [foldOverrideByTier, setFoldOverrideByTier] = useState<DiffFoldOverridesByTier>({
-    source: null,
-    test: null,
-    generated: null,
-  });
-  const [diffRenderMode, setDiffRenderMode] = useState<"stacked" | "split">("stacked");
+  const [foldOverride, setFoldOverride] = useState<DiffFoldOverride>(null);
+  const diffLayout = settings.diffLayout;
+  const updateClientSettings = useUpdateClientSettings();
   const [wordWrap, setWordWrap] = useState(settings.wordWrap);
+  const [fileTreeOpen, setFileTreeOpen] = useLocalStorage(
+    PULL_REQUEST_FILE_TREE_STORAGE_KEY,
+    false,
+    Schema.Boolean,
+  );
   const [selectedLines, setSelectedLines] = useState<{
     id: string;
     range: SelectedLineRange;
@@ -245,6 +250,7 @@ export function PullRequestCodeTab({
     readonly slices: ReadonlyArray<DiffSlice>;
   }>({ key: "", cursor: null, slices: NO_SLICES });
   const parseCache = useRef(new Map<string, RenderablePatch>());
+  const [viewer, setViewer] = useState<CodeViewHandle<ReviewAnnotationGroup> | null>(null);
 
   const referenceKey = pullRequestReviewKey(reference);
   const commit = selectedCommitOid;
@@ -257,7 +263,7 @@ export function PullRequestCodeTab({
     setDraft(null);
     setSelectedLines(null);
     setToggledFiles(new Set());
-    setFoldOverrideByTier({ source: null, test: null, generated: null });
+    setFoldOverride(null);
     setVisibleCommitCount(COMMIT_PAGE_SIZE);
     setOrphansOpen(false);
     setSliceState({ key: scopeKey, cursor: null, slices: NO_SLICES });
@@ -405,32 +411,6 @@ export function PullRequestCodeTab({
       ),
     [parsedSlices],
   );
-  const omittedFileStats = useMemo(
-    () =>
-      new Map(
-        loadedSlices.flatMap((slice) =>
-          slice.omittedFileStats.map((file) => [file.path, file] as const),
-        ),
-      ),
-    [loadedSlices],
-  );
-  const actionableFilePaths = useMemo(() => {
-    const paths = new Set<string>();
-    for (const comment of pendingComments) paths.add(comment.path);
-    for (const thread of detail.reviewThreads) {
-      if (!thread.isResolved) paths.add(thread.path);
-    }
-    if (draft) {
-      const draftFile = files.find((file) => buildFileDiffRenderKey(file) === draft.fileKey);
-      if (draftFile) paths.add(resolveFileDiffPath(draftFile));
-    }
-    return paths;
-  }, [detail.reviewThreads, draft, files, pendingComments]);
-  const focusedDiff = useMemo(
-    () => focusOrderedDiffFiles(files, diffFocusPreferences, actionableFilePaths, omittedFileStats),
-    [actionableFilePaths, diffFocusPreferences, files, omittedFileStats],
-  );
-  const visibleFiles = focusedDiff.visibleFiles;
   const nextCursor = loadedSlices.at(-1)?.nextCursor ?? null;
   // What a slice withheld: the host declining to inline part of it, or a patch the viewer could
   // not structure and so dropped. Neither says anything about there being more to fetch.
@@ -465,7 +445,7 @@ export function PullRequestCodeTab({
 
   const items = useMemo<CodeViewDiffItem<ReviewAnnotationGroup>[]>(
     () =>
-      visibleFiles.map((fileDiff) => {
+      files.map((fileDiff) => {
         const fileKey = buildFileDiffRenderKey(fileDiff);
         const path = resolveFileDiffPath(fileDiff);
         // One annotation per line, so a line that already carries a conversation shows a new
@@ -505,11 +485,7 @@ export function PullRequestCodeTab({
           groupAt(anchor.side, anchor.line).draft = true;
         }
 
-        const collapsed = isFileDiffCollapsed(
-          fileKey,
-          foldOverrideByTier[diffFileTier(path)],
-          toggledFiles,
-        );
+        const collapsed = isFileDiffCollapsed(fileKey, foldOverride, toggledFiles);
 
         const annotations: ReviewAnnotation[] = [...groups.values()].map((group) => ({
           side: toViewerSide(group.side),
@@ -558,48 +534,58 @@ export function PullRequestCodeTab({
       commit,
       detail.reviewThreads,
       draft,
-      visibleFiles,
-      foldOverrideByTier,
+      files,
+      foldOverride,
       pendingComments,
       placedThreadIds,
       toggledFiles,
     ],
   );
   const lineStat = useMemo(() => getDiffLineStat(files), [files]);
+  const omittedFileStats = useMemo(
+    () =>
+      new Map(
+        loadedSlices.flatMap((slice) =>
+          slice.omittedFileStats.map((file) => [file.path, file] as const),
+        ),
+      ),
+    [loadedSlices],
+  );
   const fileKeys = useMemo(() => items.map((item) => item.id), [items]);
   const collapsedFileKeys = useMemo(
     () => new Set(items.filter((item) => item.collapsed === true).map((item) => item.id)),
     [items],
   );
   const allFilesCollapsed = areAllDiffFilesCollapsed(fileKeys, collapsedFileKeys);
+  const fileTreeEntries = useMemo(() => diffFileTreeEntries(files), [files]);
+
+  // A failed slice must not be asked for again on its own. The files already loaded keep the
+  // sentinel on screen, so re-arming it after a failure would request the same slice forever.
+  const canLoadNextSlice =
+    nextCursor !== null &&
+    nextCursor !== cursor &&
+    !diffQuery.isPending &&
+    diffQuery.error === null;
+  const loadNextSlice = useCallback(() => {
+    if (nextCursor === null) return;
+    setSliceState((previous) => ({ ...previous, cursor: nextCursor }));
+  }, [nextCursor]);
 
   // The sentinel is held as state rather than a ref because the viewer mounts its own footer:
   // an effect reading a ref could run before that node exists and would never arm the observer.
   const [sentinel, setSentinel] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
-    // A failed slice must stop the observer. The files already loaded keep the sentinel on
-    // screen, so re-arming it after a failure would ask for the same slice again, forever.
-    if (
-      sentinel === null ||
-      nextCursor === null ||
-      nextCursor === cursor ||
-      diffQuery.isPending ||
-      diffQuery.error !== null
-    ) {
-      return;
-    }
+    if (sentinel === null || !canLoadNextSlice) return;
     const observer = new IntersectionObserver(
       (observed) => {
-        if (observed.some((entry) => entry.isIntersecting)) {
-          setSliceState((previous) => ({ ...previous, cursor: nextCursor }));
-        }
+        if (observed.some((entry) => entry.isIntersecting)) loadNextSlice();
       },
       // Start the next slice slightly before the sentinel is on screen.
       { rootMargin: "240px" },
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [cursor, diffQuery.error, diffQuery.isPending, nextCursor, sentinel]);
+  }, [canLoadNextSlice, loadNextSlice, sentinel]);
 
   // A stable identity: the viewer's SlotPortals memoizes each file's header/annotation portal on
   // these render props, so a fresh function here would recreate every visible file's portal on
@@ -617,35 +603,24 @@ export function PullRequestCodeTab({
     [],
   );
 
-  const toggleAllFiles = () => {
-    const nextOverride = areAllDiffFilesCollapsed(fileKeys, collapsedFileKeys)
-      ? "expanded"
-      : "folded";
-    const visibleFileKeys = new Set(fileKeys);
-    const result = applyVisibleDiffFoldOverride({
-      override: nextOverride,
-      shownTiers: new Set<DiffFileTier>([
-        ...(diffFocusPreferences.showTests ? (["test"] as const) : []),
-        ...(diffFocusPreferences.showGenerated ? (["generated"] as const) : []),
-      ]),
-      files: files.map((file) => {
-        const key = buildFileDiffRenderKey(file);
-        return {
-          key,
-          tier: diffFileTier(resolveFileDiffPath(file)),
-          visible: visibleFileKeys.has(key),
-        };
-      }),
-      overridesByTier: foldOverrideByTier,
-      toggledFileKeys: toggledFiles,
-    });
-    setFoldOverrideByTier(result.overridesByTier);
-    setToggledFiles(result.toggledFileKeys);
-  };
+  const requestTreeReveal = useCodeViewFileReveal(viewer, scopeKey);
+  const revealFile = useCallback(
+    (path: string) => {
+      const item = items.find((candidate) => resolveFileDiffPath(candidate.fileDiff) === path);
+      if (item === undefined) return;
+      if (item.collapsed === true) toggleFile(item.id);
+      requestTreeReveal(item.id);
+    },
+    [items, requestTreeReveal, toggleFile],
+  );
 
-  const setDiffFileTierVisible = useCallback((tier: DiffFocusableTier, visible: boolean) => {
-    useDiffFocusStore.getState().setTierVisible(tier, visible);
-  }, []);
+  const toggleAllFiles = () => {
+    // Held as an override of the default rather than as the file keys on screen: a diff that is
+    // still paging would otherwise bring its next slice in folded, moments after the reader
+    // asked for everything to be open.
+    setFoldOverride(areAllDiffFilesCollapsed(fileKeys, collapsedFileKeys) ? "expanded" : "folded");
+    setToggledFiles(new Set());
+  };
 
   // Newest first: the last commit is the one a reader coming back to a change is looking for.
   const orderedCommits = useMemo(
@@ -713,42 +688,28 @@ export function PullRequestCodeTab({
   // screen on any tab re-render (a drag-selection, a keystroke in the draft, a review-store
   // update), which is the jank this file is otherwise clean of.
   const renderCodeViewFooter = useCallback(
-    () => (
-      <>
-        <DeferredDiffFiles
-          categories={focusedDiff.deferredCategories}
-          incomplete={nextCursor !== null}
-          onShow={(tier) => setDiffFileTierVisible(tier, true)}
-        />
-        {/* Only while something is still owed. A finished diff whose query fails on a later
-              refresh is whole on screen already. */}
-        {nextCursor === null ? null : (
-          <div
-            ref={setSentinel}
-            className="flex items-center justify-center gap-2 py-2 text-xs text-muted-foreground"
-          >
-            {diffQuery.error !== null ? (
-              <>
-                <span>The rest of this diff could not be loaded.</span>
-                <Button size="xs" variant="outline" onClick={() => diffQuery.refresh()}>
-                  Retry
-                </Button>
-              </>
-            ) : diffQuery.isPending ? (
-              "Loading more files..."
-            ) : null}
-          </div>
-        )}
-      </>
-    ),
-    [
-      diffQuery.error,
-      diffQuery.isPending,
-      diffQuery.refresh,
-      focusedDiff.deferredCategories,
-      nextCursor,
-      setDiffFileTierVisible,
-    ],
+    () =>
+      // Only while something is still owed. A finished diff whose query fails on a later
+      // refresh — a reconnect re-runs every one of them — is whole on screen already, and
+      // saying otherwise sends the reader looking for files that are all there.
+      nextCursor === null ? null : (
+        <div
+          ref={setSentinel}
+          className="flex items-center justify-center gap-2 py-2 text-xs text-muted-foreground"
+        >
+          {diffQuery.error !== null ? (
+            <>
+              <span>The rest of this diff could not be loaded.</span>
+              <Button size="xs" variant="outline" onClick={() => diffQuery.refresh()}>
+                Retry
+              </Button>
+            </>
+          ) : diffQuery.isPending ? (
+            "Loading more files..."
+          ) : null}
+        </div>
+      ),
+    [nextCursor, diffQuery.error, diffQuery.isPending, diffQuery.refresh],
   );
 
   const renderHeaderPrefix = useCallback(
@@ -805,10 +766,11 @@ export function PullRequestCodeTab({
 
   const diffViewOptions = useMemo(
     () => ({
-      diffStyle: diffRenderMode === "split" ? ("split" as const) : ("unified" as const),
+      diffStyle: diffLayout === "split" ? ("split" as const) : ("unified" as const),
       lineDiffType: "none" as const,
       overflow: wordWrap ? ("wrap" as const) : ("scroll" as const),
       theme: resolveDiffThemeName(resolvedTheme),
+      preferredHighlighter: PREFERRED_HIGHLIGHTER,
       themeType: resolvedTheme,
       stickyHeaders: true,
       loadDiffFiles,
@@ -821,15 +783,7 @@ export function PullRequestCodeTab({
       onGutterUtilityClick: beginComment,
       onLineSelectionEnd: beginComment,
     }),
-    [
-      diffRenderMode,
-      wordWrap,
-      resolvedTheme,
-      loadDiffFiles,
-      canCommentOnLines,
-      draft,
-      beginComment,
-    ],
+    [diffLayout, wordWrap, resolvedTheme, loadDiffFiles, canCommentOnLines, draft, beginComment],
   );
 
   const runThreadCommand = useCallback(
@@ -1159,16 +1113,6 @@ export function PullRequestCodeTab({
           deletions={lineStat.deletions}
           className="mr-1"
         />
-        <DiffFocusMenu
-          preferences={diffFocusPreferences}
-          testFileCount={focusedDiff.fileCountByTier.test}
-          generatedFileCount={focusedDiff.fileCountByTier.generated}
-          deferredFileCount={focusedDiff.deferredCategories.reduce(
-            (count, category) => count + category.files.length,
-            0,
-          )}
-          onTierVisibilityChange={setDiffFileTierVisible}
-        />
         {fileKeys.length > 0 ? (
           <Tooltip>
             <TooltipTrigger
@@ -1194,20 +1138,21 @@ export function PullRequestCodeTab({
           </Tooltip>
         ) : null}
         <ToggleGroup
-          className="shrink-0 gap-1"
-          size="sm"
-          value={[diffRenderMode]}
+          aria-label="Diff layout"
+          className="shrink-0"
+          variant="segmented"
+          value={[diffLayout]}
           onValueChange={(value) => {
             const next = value[0];
             if (next === "stacked" || next === "split") {
-              setDiffRenderMode(next);
+              updateClientSettings({ diffLayout: next });
             }
           }}
         >
-          <Toggle aria-label="Stacked diff view" value="stacked" variant="ghost">
+          <Toggle aria-label="Stacked diff view" value="stacked">
             <Rows3Icon className="size-3.5" />
           </Toggle>
-          <Toggle aria-label="Split diff view" value="split" variant="ghost">
+          <Toggle aria-label="Split diff view" value="split">
             <Columns2Icon className="size-3.5" />
           </Toggle>
         </ToggleGroup>
@@ -1231,6 +1176,26 @@ export function PullRequestCodeTab({
             {wordWrap ? "Disable line wrapping" : "Enable line wrapping"}
           </TooltipPopup>
         </Tooltip>
+        {fileKeys.length > 0 ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Toggle
+                  aria-label={fileTreeOpen ? "Hide file tree" : "Show file tree"}
+                  variant="ghost"
+                  size="sm"
+                  pressed={fileTreeOpen}
+                  onPressedChange={(pressed) => setFileTreeOpen(Boolean(pressed))}
+                />
+              }
+            >
+              <FolderTreeIcon className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipPopup side="top">
+              {fileTreeOpen ? "Hide file tree" : "Show file tree"}
+            </TooltipPopup>
+          </Tooltip>
+        ) : null}
       </div>
     </div>
   );
@@ -1284,7 +1249,7 @@ export function PullRequestCodeTab({
     );
   }
 
-  if (files.length === 0 && nextCursor === null) {
+  if (items.length === 0 && nextCursor === null) {
     return withReviewBar(
       <p className="px-4 py-5 text-sm text-muted-foreground">
         {commit === null
@@ -1320,76 +1285,74 @@ export function PullRequestCodeTab({
     );
 
   return (
-    <DiffWorkerPoolProvider>
-      <div className="flex h-full min-h-0 flex-col">
-        {toolbar}
-        {/* Above the code, closed, and counted: these belong to the change rather than to any
+    <div className="flex h-full min-h-0 flex-col">
+      {toolbar}
+      {/* Above the code, closed, and counted: these belong to the change rather than to any
             line of it, and in the stream they read as cards dropped into the patch. */}
-        {orphanFiles.size > 0 ? (
-          <Collapsible
-            className="shrink-0 border-b border-border/60"
-            open={orphansOpen}
-            onOpenChange={setOrphansOpen}
-          >
-            {/* Still a heading, so the section keeps its place in a screen reader's outline;
+      {orphanFiles.size > 0 ? (
+        <Collapsible
+          className="shrink-0 border-b border-border/60"
+          open={orphansOpen}
+          onOpenChange={setOrphansOpen}
+        >
+          {/* Still a heading, so the section keeps its place in a screen reader's outline;
                 the count is spelled out there rather than left as a bare number. */}
-            <h2>
-              <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-4 py-2 text-left text-xs text-muted-foreground">
-                {/* While slices are still arriving a conversation may simply belong to a file
+          <h2>
+            <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-4 py-2 text-left text-xs text-muted-foreground">
+              {/* While slices are still arriving a conversation may simply belong to a file
                     that has not landed yet, which is not the same as being off the diff. */}
-                <span>
-                  {nextCursor === null
-                    ? "Conversations not on the current diff"
-                    : "Conversations not on the diff loaded so far"}
-                </span>
-                <ChevronRightIcon
-                  aria-hidden
-                  className={cn("size-3.5 transition-transform", orphansOpen && "rotate-90")}
-                />
-                <span aria-hidden className="tabular-nums">
-                  {orphanThreads.length}
-                </span>
-                <span className="sr-only">
-                  {orphanThreads.length === 1
-                    ? "1 conversation"
-                    : `${orphanThreads.length} conversations`}
-                </span>
-              </CollapsibleTrigger>
-            </h2>
-            <CollapsiblePanel>
-              {/* Capped: opened on a change with dozens of them, this would otherwise leave no
+              <span>
+                {nextCursor === null
+                  ? "Conversations not on the current diff"
+                  : "Conversations not on the diff loaded so far"}
+              </span>
+              <ChevronRightIcon
+                aria-hidden
+                className={cn("size-3.5 transition-transform", orphansOpen && "rotate-90")}
+              />
+              <span aria-hidden className="tabular-nums">
+                {orphanThreads.length}
+              </span>
+              <span className="sr-only">
+                {orphanThreads.length === 1
+                  ? "1 conversation"
+                  : `${orphanThreads.length} conversations`}
+              </span>
+            </CollapsibleTrigger>
+          </h2>
+          <CollapsiblePanel>
+            {/* Capped: opened on a change with dozens of them, this would otherwise leave no
                   room for the diff it sits above. */}
-              <div className="max-h-64 space-y-3 overflow-auto px-4 pb-3">
-                {[...orphanFiles].map(([path, threads]) => (
-                  <div key={path}>
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <p className="truncate px-3 text-xs text-muted-foreground">{path}</p>
-                        }
-                      />
-                      <TooltipPopup side="top">{path}</TooltipPopup>
-                    </Tooltip>
-                    <div className="mt-1 space-y-2">
-                      {threads.map((thread) => (
-                        <div key={thread.id}>
-                          {thread.line === null ? null : (
-                            <p className="px-3 text-xs text-muted-foreground">Line {thread.line}</p>
-                          )}
-                          {renderThreadCard(thread)}
-                        </div>
-                      ))}
-                    </div>
+            <div className="max-h-64 space-y-3 overflow-auto px-4 pb-3">
+              {[...orphanFiles].map(([path, threads]) => (
+                <div key={path}>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={<p className="truncate px-3 text-xs text-muted-foreground">{path}</p>}
+                    />
+                    <TooltipPopup side="top">{path}</TooltipPopup>
+                  </Tooltip>
+                  <div className="mt-1 space-y-2">
+                    {threads.map((thread) => (
+                      <div key={thread.id}>
+                        {thread.line === null ? null : (
+                          <p className="px-3 text-xs text-muted-foreground">Line {thread.line}</p>
+                        )}
+                        {renderThreadCard(thread)}
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            </CollapsiblePanel>
-          </Collapsible>
-        ) : null}
+                </div>
+              ))}
+            </div>
+          </CollapsiblePanel>
+        </Collapsible>
+      ) : null}
+      <div className="flex min-h-0 flex-1 overflow-hidden">
         {/* Relative wrapper so the review overlay floats over the diff rather than pushing it
             up; the viewer inside still owns its own scrolling. */}
         <div
-          className="relative min-h-0 flex-1"
+          className="relative min-h-0 min-w-0 flex-1"
           // The chevron answers this too, but the whole header row is the target a reader
           // actually aims for. The header lives in the viewer's shadow tree, so the capture
           // listener walks `composedPath` — the only way to see through the shadow boundary.
@@ -1424,6 +1387,7 @@ export function PullRequestCodeTab({
             // interaction, but its native host outline clips and competes with the focus
             // indicators on its actual controls.
             className="h-full overflow-auto [scrollbar-gutter:stable]"
+            viewerRef={setViewer}
             items={items}
             selectedLines={selectedLines}
             onSelectedLinesChange={setSelectedLines}
@@ -1439,9 +1403,40 @@ export function PullRequestCodeTab({
           />
           {reviewOverlay}
         </div>
-        {unstructured}
+        {fileTreeOpen ? (
+          <aside className="flex w-[min(20rem,40%)] min-w-48 shrink-0 border-l border-border/60">
+            <DiffFileTree
+              ariaLabel={`Pull request #${detail.number} files`}
+              entries={fileTreeEntries}
+              onSelectFile={revealFile}
+              // The tree lists only what has arrived; a footer says so while the diff is still
+              // paging, and lets the reader pull the rest in without scrolling for it.
+              footer={
+                nextCursor === null ? null : (
+                  <div className="shrink-0 border-t border-border/60 p-2">
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="outline"
+                      className="w-full"
+                      disabled={diffQuery.isPending}
+                      onClick={diffQuery.error !== null ? () => diffQuery.refresh() : loadNextSlice}
+                    >
+                      {diffQuery.error !== null
+                        ? "Retry"
+                        : diffQuery.isPending
+                          ? "Loading more files..."
+                          : "Load more files"}
+                    </Button>
+                  </div>
+                )
+              }
+            />
+          </aside>
+        ) : null}
       </div>
-    </DiffWorkerPoolProvider>
+      {unstructured}
+    </div>
   );
 }
 

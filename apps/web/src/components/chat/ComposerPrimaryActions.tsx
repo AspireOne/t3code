@@ -4,8 +4,10 @@ import { useEnvironmentIdentificationMode } from "~/hooks/useSettings";
 import { cn, isMacPlatform } from "~/lib/utils";
 import { StageBackdropButtonArt, useSidebarStageBackdropVariant } from "../SidebarStageBackdrop";
 import { Button } from "../ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Spinner } from "../ui/spinner";
+import { composerFloatingLayerProps } from "./composerEventScope";
 
 interface PendingActionState {
   questionIndex: number;
@@ -38,7 +40,7 @@ interface ComposerPrimaryActionsProps {
   onImplementPlanInNewThread: () => void;
 }
 
-export const formatPendingPrimaryActionLabel = (input: {
+const formatPendingPrimaryActionLabel = (input: {
   compact: boolean;
   isLastQuestion: boolean;
   isResponding: boolean;
@@ -216,7 +218,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           >
             <ChevronDownIcon className="size-3.5" />
           </MenuTrigger>
-          <MenuPopup align="end" side="top">
+          <MenuPopup align="end" side="top" {...composerFloatingLayerProps}>
             <MenuItem
               disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
               onClick={() => void onImplementPlanInNewThread()}
@@ -282,26 +284,32 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   );
 
   const queueButton = onQueue ? (
-    <Button
-      type="button"
-      size="icon-sm"
-      variant="ghost"
-      className="rounded-full text-muted-foreground hover:text-foreground"
-      {...pointerFocusProps}
-      disabled={
-        isSendBusy ||
-        isSendDisabled ||
-        isConnecting ||
-        isEnvironmentUnavailable ||
-        !hasSendableContent
-      }
-      aria-label="Queue message"
-      aria-keyshortcuts={queueShortcut}
-      title={`Queue message (${queueShortcutLabel})`}
-      onClick={onQueue}
-    >
-      <ListEndIcon className="size-4" />
-    </Button>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            className="rounded-full text-muted-foreground hover:text-foreground"
+            {...pointerFocusProps}
+            disabled={
+              isSendBusy ||
+              isSendDisabled ||
+              isConnecting ||
+              isEnvironmentUnavailable ||
+              !hasSendableContent
+            }
+            aria-label="Queue message"
+            aria-keyshortcuts={queueShortcut}
+            onClick={onQueue}
+          >
+            <ListEndIcon className="size-4" />
+          </Button>
+        }
+      />
+      <TooltipPopup>Queue message ({queueShortcutLabel})</TooltipPopup>
+    </Tooltip>
   ) : null;
 
   if (!isRunning) {

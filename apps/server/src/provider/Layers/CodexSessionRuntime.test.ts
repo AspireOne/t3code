@@ -3,179 +3,26 @@ import * as NodeAssert from "node:assert/strict";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
 import { describe } from "vite-plus/test";
 import { DEFAULT_MODEL, ThreadId, TurnId } from "@t3tools/contracts";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexRpc from "effect-codex-app-server/rpc";
 import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
-import {
-  buildCodexDeveloperInstructions,
-  codexDefaultModeDeveloperInstructions,
-  codexPlanModeDeveloperInstructions,
-} from "../CodexDeveloperInstructions.ts";
+import { buildCodexDeveloperInstructions } from "../CodexDeveloperInstructions.ts";
 import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import {
   buildTurnStartParams,
-  coordinateCodexRateLimitNotification,
   describeMcpElicitation,
   hasConfiguredMcpServer,
   isLegacyThreadRevertUnsupportedError,
   isRecoverableThreadResumeError,
   makeMemoryConsolidationNotificationFilter,
   openCodexThread,
-  readCodexAccountRateLimits,
   revertOrRollbackCodexThread,
   toMcpElicitationResponse,
 } from "./CodexSessionRuntime.ts";
-import type {
-  CodexRateLimitCoordinatorShape,
-  CodexRateLimitSnapshot,
-} from "../CodexRateLimitCoordinator.ts";
 const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
-
-describe("Codex account and rate-limit reads", () => {
-  const account = (
-    email: string,
-  ): NonNullable<EffectCodexSchema.V2GetAccountResponse["account"]> => ({
-    type: "chatgpt",
-    email,
-    planType: "plus",
-  });
-  const rateLimits = (usedPercent: number): EffectCodexSchema.V2GetAccountRateLimitsResponse => ({
-    rateLimits: {
-      primary: {
-        usedPercent,
-        windowDurationMins: 300,
-        resetsAt: 1_900_000_000,
-      },
-    },
-  });
-
-  it.effect("confirms the account after reading its rate limits", () =>
-    Effect.gen(function* () {
-      const accountA = account("a@example.com");
-      const calls: string[] = [];
-      const result = yield* readCodexAccountRateLimits({
-        readAccount: () =>
-          Effect.sync(() => {
-            calls.push("account/read");
-            return { account: accountA, requiresOpenaiAuth: false };
-          }),
-        readRateLimits: () =>
-          Effect.sync(() => {
-            calls.push("account/rateLimits/read");
-            return rateLimits(41);
-          }),
-      });
-
-      NodeAssert.deepStrictEqual(calls, [
-        "account/read",
-        "account/rateLimits/read",
-        "account/read",
-      ]);
-      NodeAssert.deepStrictEqual(result, {
-        account: accountA,
-        accountKey: "chatgpt:a@example.com",
-        rateLimits: rateLimits(41),
-      });
-    }),
-  );
-
-  it.effect("retries after an account transition before accepting limits", () =>
-    Effect.gen(function* () {
-      const accountA = account("a@example.com");
-      const accountB = account("b@example.com");
-      const accounts = [accountA, accountB, accountB, accountB];
-      const responses = [rateLimits(41), rateLimits(24)];
-      const calls: string[] = [];
-      const result = yield* readCodexAccountRateLimits({
-        readAccount: () =>
-          Effect.sync(() => {
-            calls.push("account/read");
-            return {
-              account: accounts.shift() ?? accountB,
-              requiresOpenaiAuth: false,
-            };
-          }),
-        readRateLimits: () =>
-          Effect.sync(() => {
-            calls.push("account/rateLimits/read");
-            return responses.shift() ?? rateLimits(0);
-          }),
-      });
-
-      NodeAssert.deepStrictEqual(calls, [
-        "account/read",
-        "account/rateLimits/read",
-        "account/read",
-        "account/read",
-        "account/rateLimits/read",
-        "account/read",
-      ]);
-      NodeAssert.deepStrictEqual(result, {
-        account: accountB,
-        accountKey: "chatgpt:b@example.com",
-        rateLimits: rateLimits(24),
-      });
-    }),
-  );
-
-  it.effect("discards limits when the account remains unstable after retry", () =>
-    Effect.gen(function* () {
-      const accounts = [
-        account("a@example.com"),
-        account("b@example.com"),
-        account("c@example.com"),
-        account("d@example.com"),
-      ];
-      const calls: string[] = [];
-      const result = yield* readCodexAccountRateLimits({
-        readAccount: () =>
-          Effect.sync(() => {
-            calls.push("account/read");
-            return { account: accounts.shift() ?? null, requiresOpenaiAuth: false };
-          }),
-        readRateLimits: () =>
-          Effect.sync(() => {
-            calls.push("account/rateLimits/read");
-            return rateLimits(41);
-          }),
-      });
-
-      NodeAssert.deepStrictEqual(calls, [
-        "account/read",
-        "account/rateLimits/read",
-        "account/read",
-        "account/read",
-        "account/rateLimits/read",
-        "account/read",
-      ]);
-      NodeAssert.deepStrictEqual(result, {
-        account: account("d@example.com"),
-        accountKey: "chatgpt:d@example.com",
-      });
-    }),
-  );
-});
-
-describe("CodexSessionRuntimeIdentifierGenerationError", () => {
-  it("retains identifier purpose and the random source failure", () => {
-    const cause = new Error("random source unavailable");
-    const error = new CodexErrors.CodexAppServerIdentifierGenerationError({
-      purpose: "provider-event",
-      cause,
-    });
-
-    NodeAssert.equal(error.purpose, "provider-event");
-    NodeAssert.strictEqual(error.cause, cause);
-    NodeAssert.equal(
-      error.message,
-      "Failed to generate Codex App Server identifier for provider-event.",
-    );
-  });
-});
 
 function makeThreadOpenResponse(
   threadId: string,
@@ -198,116 +45,6 @@ function makeThreadOpenResponse(
       },
     },
   } as unknown as CodexRpc.ClientRequestResponsesByMethod["thread/start"];
-}
-
-describe("Codex account rate-limit notification coordination", () => {
-  it.effect("resets account-bound quota state before forwarding account changes", () =>
-    Effect.gen(function* () {
-      const calls: string[] = [];
-      const coordinator = makeRateLimitCoordinatorSpy(calls);
-
-      const intercepted = yield* coordinateCodexRateLimitNotification({
-        coordinator,
-        sessionId: "session-a",
-        rootProviderThreadId: "provider-root",
-        notification: {
-          method: "account/updated",
-          params: { authMode: "chatgpt", planType: "plus" },
-        },
-      });
-
-      NodeAssert.equal(intercepted, false);
-      NodeAssert.deepStrictEqual(calls, ["account-changed:session-a"]);
-    }),
-  );
-
-  it.effect("invalidates on sparse account updates without forwarding the notification", () =>
-    Effect.gen(function* () {
-      const calls: string[] = [];
-      const coordinator = makeRateLimitCoordinatorSpy(calls);
-
-      const intercepted = yield* coordinateCodexRateLimitNotification({
-        coordinator,
-        sessionId: "session-a",
-        rootProviderThreadId: "provider-root",
-        notification: {
-          method: "account/rateLimits/updated",
-          params: { rateLimits: {} },
-        },
-      });
-
-      NodeAssert.equal(intercepted, true);
-      NodeAssert.deepStrictEqual(calls, ["invalidate:session-a"]);
-    }),
-  );
-
-  it.effect("tracks only root turn boundaries and ignores child-agent turns", () =>
-    Effect.gen(function* () {
-      const calls: string[] = [];
-      const coordinator = makeRateLimitCoordinatorSpy(calls);
-
-      yield* coordinateCodexRateLimitNotification({
-        coordinator,
-        sessionId: "session-a",
-        rootProviderThreadId: "provider-root",
-        notification: {
-          method: "turn/started",
-          params: {
-            threadId: "provider-root",
-            turn: { id: "root-turn", status: "inProgress", items: [] },
-          },
-        },
-      });
-      yield* coordinateCodexRateLimitNotification({
-        coordinator,
-        sessionId: "session-a",
-        rootProviderThreadId: "provider-root",
-        notification: {
-          method: "turn/completed",
-          params: {
-            threadId: "provider-root",
-            turn: { id: "root-turn", status: "completed", items: [] },
-          },
-        },
-      });
-      yield* coordinateCodexRateLimitNotification({
-        coordinator,
-        sessionId: "session-a",
-        rootProviderThreadId: "provider-root",
-        notification: {
-          method: "turn/started",
-          params: {
-            threadId: "provider-child",
-            turn: { id: "child-turn", status: "inProgress", items: [] },
-          },
-        },
-      });
-
-      NodeAssert.deepStrictEqual(calls, [
-        "started:session-a:root-turn",
-        "settled:session-a:root-turn",
-      ]);
-    }),
-  );
-});
-
-function makeRateLimitCoordinatorSpy(calls: string[]): CodexRateLimitCoordinatorShape {
-  return {
-    current: Effect.succeed(undefined as CodexRateLimitSnapshot | undefined),
-    generation: Effect.succeed(0),
-    changes: Stream.empty,
-    syncAccount: () => Effect.void,
-    registerSession: () => Effect.void,
-    unregisterSession: () => Effect.void,
-    accountChanged: (sessionId) =>
-      Effect.sync(() => calls.push(`account-changed:${sessionId}`)).pipe(Effect.asVoid),
-    turnStarted: (sessionId, turnId) =>
-      Effect.sync(() => calls.push(`started:${sessionId}:${turnId}`)).pipe(Effect.asVoid),
-    turnSettled: (sessionId, turnId) =>
-      Effect.sync(() => calls.push(`settled:${sessionId}:${turnId}`)).pipe(Effect.asVoid),
-    invalidate: (sessionId) =>
-      Effect.sync(() => calls.push(`invalidate:${sessionId}`)).pipe(Effect.asVoid),
-  };
 }
 
 describe("buildTurnStartParams", () => {
@@ -703,10 +440,23 @@ describe("buildCodexDeveloperInstructions", () => {
       reasoningEffort: "high",
     });
 
-    NodeAssert.ok(instructions.startsWith(codexDefaultModeDeveloperInstructions(true)));
+    NodeAssert.match(instructions, /^<collaboration_mode># Collaboration Mode: Default/);
     NodeAssert.match(instructions, /T3 Code/);
     NodeAssert.match(instructions, /Codex harness/);
     NodeAssert.match(instructions, /as gpt-5\.3-codex with high reasoning effort/);
+  });
+
+  it("describes Markdown media support in the runtime context in both modes", () => {
+    for (const mode of ["default", "plan"] as const) {
+      const instructions = buildCodexDeveloperInstructions(mode, {
+        model: "gpt-5.3-codex",
+        reasoningEffort: "high",
+      });
+      NodeAssert.match(
+        instructions,
+        /<runtime_info>.*embed images and videos.*Markdown.*<\/runtime_info>/,
+      );
+    }
   });
 
   it("includes runtime info alongside plan mode instructions", () => {
@@ -715,7 +465,7 @@ describe("buildCodexDeveloperInstructions", () => {
       reasoningEffort: "medium",
     });
 
-    NodeAssert.ok(instructions.startsWith(codexPlanModeDeveloperInstructions(true)));
+    NodeAssert.match(instructions, /^<collaboration_mode># Plan Mode/);
     NodeAssert.match(instructions, /as gpt-5\.3-codex with medium reasoning effort/);
   });
 
@@ -744,11 +494,11 @@ describe("buildCodexDeveloperInstructions", () => {
 });
 
 describe("T3 browser developer instructions", () => {
+  const runtime = { model: "gpt-5.3-codex", reasoningEffort: "high" };
+
   it("prefers the product-native preview tools in both collaboration modes", () => {
-    for (const instructions of [
-      codexDefaultModeDeveloperInstructions(true),
-      codexPlanModeDeveloperInstructions(true),
-    ]) {
+    for (const mode of ["default", "plan"] as const) {
+      const instructions = buildCodexDeveloperInstructions(mode, runtime, true);
       NodeAssert.match(instructions, /t3-code/);
       NodeAssert.match(instructions, /preview_status/);
       NodeAssert.match(instructions, /preview_open/);
@@ -757,10 +507,8 @@ describe("T3 browser developer instructions", () => {
   });
 
   it("omits the browser block entirely when the preview tools are not attached", () => {
-    for (const instructions of [
-      codexDefaultModeDeveloperInstructions(false),
-      codexPlanModeDeveloperInstructions(false),
-    ]) {
+    for (const mode of ["default", "plan"] as const) {
+      const instructions = buildCodexDeveloperInstructions(mode, runtime, false);
       NodeAssert.doesNotMatch(instructions, /preview_status/);
       NodeAssert.doesNotMatch(instructions, /preview_open/);
       NodeAssert.doesNotMatch(instructions, /T3 Code collaborative browser/);
@@ -774,7 +522,6 @@ describe("T3 browser developer instructions", () => {
   });
 
   it("tracks the turn's MCP configuration rather than defaulting to on", () => {
-    const runtime = { model: "gpt-5.3-codex", reasoningEffort: "high" };
     NodeAssert.match(buildCodexDeveloperInstructions("default", runtime, true), /preview_open/);
     NodeAssert.doesNotMatch(
       buildCodexDeveloperInstructions("default", runtime, false),
@@ -1251,25 +998,123 @@ describe("openCodexThread", () => {
     }),
   );
 
+  it.effect("resumes metadata when historical turns contain unknown error values", () =>
+    Effect.gen(function* () {
+      const response = makeThreadOpenResponse("saved-thread");
+      const calls: unknown[] = [];
+      const opened = yield* openCodexThread({
+        client: {
+          request: () => Effect.die("A valid resumed thread must not start fresh"),
+          raw: {
+            request: (method, payload) => {
+              calls.push({ method, payload });
+              return Effect.succeed({
+                ...response,
+                thread: {
+                  ...response.thread,
+                  turns: [
+                    {
+                      id: "old-turn",
+                      status: "failed",
+                      items: [],
+                      error: {
+                        message: "Historical provider error",
+                        codexErrorInfo: "misalignment_policy_violation",
+                      },
+                    },
+                  ],
+                },
+              });
+            },
+          },
+        },
+        threadId: ThreadId.make("thread-1"),
+        runtimeMode: "auto",
+        cwd: "/tmp/project",
+        requestedModel: "gpt-5.3-codex",
+        serviceTier: "fast",
+        resumeThreadId: "saved-thread",
+      });
+
+      NodeAssert.deepStrictEqual(opened, {
+        cwd: response.cwd,
+        model: response.model,
+        thread: { id: "saved-thread" },
+      });
+      NodeAssert.deepStrictEqual(calls, [
+        {
+          method: "thread/resume",
+          payload: {
+            threadId: "saved-thread",
+            cwd: "/tmp/project",
+            model: "gpt-5.3-codex",
+            serviceTier: "fast",
+            approvalPolicy: "on-request",
+            sandbox: "workspace-write",
+            approvalsReviewer: "auto_review",
+            excludeTurns: true,
+          },
+        },
+      ]);
+    }),
+  );
+
+  it.effect("rejects malformed required resume metadata without starting a fresh thread", () =>
+    Effect.gen(function* () {
+      for (const invalidMetadata of [
+        { cwd: null },
+        { model: 42 },
+        { thread: { id: null } },
+        { thread: {} },
+      ]) {
+        const error = yield* openCodexThread({
+          client: {
+            request: () => Effect.die("Invalid resume metadata must not start a fresh thread"),
+            raw: {
+              request: () =>
+                Effect.succeed({ ...makeThreadOpenResponse("saved-thread"), ...invalidMetadata }),
+            },
+          },
+          threadId: ThreadId.make("thread-1"),
+          runtimeMode: "full-access",
+          cwd: "/tmp/project",
+          requestedModel: "gpt-5.3-codex",
+          serviceTier: undefined,
+          resumeThreadId: "saved-thread",
+        }).pipe(Effect.flip);
+
+        NodeAssert.ok(isCodexAppServerRequestError(error));
+        NodeAssert.equal(error.operation, "decode-payload");
+        NodeAssert.equal(error.method, "thread/resume");
+      }
+    }),
+  );
+
   it.effect("falls back to thread/start when resume fails recoverably", () =>
     Effect.gen(function* () {
       const calls: Array<{ method: "thread/start" | "thread/resume"; payload: unknown }> = [];
       const started = makeThreadOpenResponse("fresh-thread");
       const client = {
-        request: <M extends "thread/start" | "thread/resume">(
-          method: M,
-          payload: CodexRpc.ClientRequestParamsByMethod[M],
-        ) => {
-          calls.push({ method, payload });
-          if (method === "thread/resume") {
+        raw: {
+          request: (
+            method: "thread/resume",
+            payload: CodexRpc.ClientRequestParamsByMethod["thread/resume"],
+          ) => {
+            calls.push({ method, payload });
             return Effect.fail(
               new CodexErrors.CodexAppServerRequestError({
                 code: -32603,
                 errorMessage: "thread not found",
               }),
             );
-          }
-          return Effect.succeed(started as CodexRpc.ClientRequestResponsesByMethod[M]);
+          },
+        },
+        request: (
+          method: "thread/start",
+          payload: CodexRpc.ClientRequestParamsByMethod["thread/start"],
+        ) => {
+          calls.push({ method, payload });
+          return Effect.succeed(started);
         },
       };
 
@@ -1294,21 +1139,15 @@ describe("openCodexThread", () => {
   it.effect("propagates non-recoverable resume failures", () =>
     Effect.gen(function* () {
       const client = {
-        request: <M extends "thread/start" | "thread/resume">(
-          method: M,
-          _payload: CodexRpc.ClientRequestParamsByMethod[M],
-        ) => {
-          if (method === "thread/resume") {
-            return Effect.fail(
+        request: () => Effect.die("Non-recoverable resume failures must not start a fresh thread"),
+        raw: {
+          request: () =>
+            Effect.fail(
               new CodexErrors.CodexAppServerRequestError({
                 code: -32603,
                 errorMessage: "timed out waiting for server",
               }),
-            );
-          }
-          return Effect.succeed(
-            makeThreadOpenResponse("fresh-thread") as CodexRpc.ClientRequestResponsesByMethod[M],
-          );
+            ),
         },
       };
 

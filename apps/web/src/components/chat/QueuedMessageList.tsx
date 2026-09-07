@@ -6,6 +6,7 @@ import type { MessageId, OrchestrationQueuedMessage } from "@t3tools/contracts";
 import { deriveDisplayedUserMessageState } from "~/lib/terminalContext";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 type QueueAction = "move" | "remove";
 
@@ -91,45 +92,64 @@ export const QueuedMessageList = memo(function QueuedMessageList(props: {
                   </>
                 ) : null}
               </div>
-              <span className="block truncate text-sm text-foreground/90" title={label}>
-                {label}
-              </span>
+              <Tooltip>
+                <TooltipTrigger
+                  render={<span className="block truncate text-sm text-foreground/90" />}
+                >
+                  {label}
+                </TooltipTrigger>
+                <TooltipPopup>{label}</TooltipPopup>
+              </Tooltip>
             </div>
-            <Button
-              type="button"
-              size="xs"
-              variant="ghost"
-              disabled={props.disabled || busyAction !== null}
-              aria-label="Move queued message back to input"
-              title="Move back to input"
-              onClick={() =>
-                void runAction(message.messageId, "move", () => props.onMoveToInput(message))
-              }
-            >
-              {isMoving && busyAction?.action === "move" ? (
-                <Spinner className="size-3.5" />
-              ) : (
-                <CornerDownLeftIcon className="size-3.5" />
-              )}
-              <span className="hidden sm:inline">Move to input</span>
-            </Button>
-            <Button
-              type="button"
-              size="icon-xs"
-              variant="ghost"
-              disabled={props.disabled || busyAction !== null}
-              aria-label="Remove queued message"
-              title="Remove queued message"
-              onClick={() =>
-                void runAction(message.messageId, "remove", () => props.onRemove(message.messageId))
-              }
-            >
-              {isMoving && busyAction?.action === "remove" ? (
-                <Spinner className="size-3.5" />
-              ) : (
-                <Trash2Icon className="size-3.5" />
-              )}
-            </Button>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="ghost"
+                    disabled={props.disabled || busyAction !== null}
+                    aria-label="Move queued message back to input"
+                    onClick={() =>
+                      void runAction(message.messageId, "move", () => props.onMoveToInput(message))
+                    }
+                  >
+                    {isMoving && busyAction?.action === "move" ? (
+                      <Spinner className="size-3.5" />
+                    ) : (
+                      <CornerDownLeftIcon className="size-3.5" />
+                    )}
+                    <span className="hidden sm:inline">Move to input</span>
+                  </Button>
+                }
+              />
+              <TooltipPopup>Move back to input</TooltipPopup>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    size="icon-xs"
+                    variant="ghost"
+                    disabled={props.disabled || busyAction !== null}
+                    aria-label="Remove queued message"
+                    onClick={() =>
+                      void runAction(message.messageId, "remove", () =>
+                        props.onRemove(message.messageId),
+                      )
+                    }
+                  >
+                    {isMoving && busyAction?.action === "remove" ? (
+                      <Spinner className="size-3.5" />
+                    ) : (
+                      <Trash2Icon className="size-3.5" />
+                    )}
+                  </Button>
+                }
+              />
+              <TooltipPopup>Remove queued message</TooltipPopup>
+            </Tooltip>
           </div>
         );
       })}

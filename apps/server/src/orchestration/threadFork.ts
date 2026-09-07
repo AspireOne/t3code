@@ -40,6 +40,8 @@ export function cloneThreadForFork(
     branch: event.payload.branch,
     worktreePath: event.payload.worktreePath,
     linkedPullRequest: null,
+    branchPullRequest: null,
+    activeOrderKey: null,
     latestTurn: {
       ...event.payload.latestTurn,
       assistantMessageId:

@@ -2,22 +2,23 @@ import {
   type ProviderDriverKind,
   type ProviderInstanceId,
   type ProviderOptionSelection,
-  type OrchestrationSession,
   type ScopedThreadRef,
-  type ServerProviderRateLimits,
   type ServerProviderModel,
 } from "@t3tools/contracts";
 import {
-  buildProviderOptionSelectionsFromDescriptors,
+  buildExplicitProviderOptionSelectionsFromDescriptors,
   getProviderOptionCurrentValue,
   getProviderOptionDescriptors,
   isClaudeUltrathinkPrompt,
   normalizeModelSlug,
 } from "@t3tools/shared/model";
+import type { VariantProps } from "class-variance-authority";
 import type { ReactNode } from "react";
 
+import type { buttonVariants } from "../ui/button";
 import type { DraftId } from "../../composerDraftStore";
 import { getProviderModelCapabilities } from "../../providerModels";
+import type { ComposerControlSize } from "./ComposerControl";
 import { shouldRenderTraitsControls, TraitsMenuContent, TraitsPicker } from "./TraitsPicker";
 
 export type ComposerProviderStateInput = {
@@ -30,73 +31,6 @@ export type ComposerProviderStateInput = {
 };
 
 export type ComposerPromptInjectionState = "none" | "ultrathink";
-
-export type ComposerCodexUsage = {
-  rateLimits: ServerProviderRateLimits | null;
-  accountEmail: string | null;
-};
-
-function normalizeAccountEmail(email: string | null | undefined): string | null {
-  const normalized = email?.trim();
-  return normalized && normalized.length > 0 ? normalized : null;
-}
-
-/** Resolve the account-bound Codex usage shown by the composer. */
-export function resolveComposerCodexUsage(input: {
-  provider: ProviderDriverKind;
-  session: OrchestrationSession | null;
-  sessionRateLimits: ServerProviderRateLimits | null;
-  sessionRateLimitsError?: string | null | undefined;
-  providerRateLimits: ServerProviderRateLimits | null;
-  providerEmail?: string | null | undefined;
-}): ComposerCodexUsage {
-  if (input.provider !== "codex") {
-    return { rateLimits: null, accountEmail: null };
-  }
-
-  const session = input.session;
-  if (session === null) {
-    return {
-      rateLimits: input.providerRateLimits,
-      accountEmail: normalizeAccountEmail(input.providerEmail),
-    };
-  }
-  const status = session.status;
-  if (status === "idle" || status === "stopped") {
-    return {
-      rateLimits: input.providerRateLimits,
-      accountEmail: normalizeAccountEmail(input.providerEmail),
-    };
-  }
-  if (status !== "ready" && status !== "running") {
-    return { rateLimits: null, accountEmail: null };
-  }
-  // The query keeps its previous success value while a refresh fails. Never
-  // present that cached snapshot as the current session's account or quota.
-  if (input.sessionRateLimitsError !== undefined && input.sessionRateLimitsError !== null) {
-    return { rateLimits: null, accountEmail: null };
-  }
-
-  const fetchedAt = Date.parse(input.sessionRateLimits?.fetchedAt ?? "");
-  const sessionStartedAt = Date.parse(session.startedAt ?? session.updatedAt);
-  if (!Number.isFinite(fetchedAt) || fetchedAt <= sessionStartedAt) {
-    return { rateLimits: null, accountEmail: null };
-  }
-
-  return {
-    rateLimits: input.sessionRateLimits,
-    accountEmail: normalizeAccountEmail(input.sessionRateLimits?.email),
-  };
-}
-
-export function resolveComposerCodexRateLimits(input: {
-  provider: ProviderDriverKind;
-  session: OrchestrationSession | null;
-  sessionRateLimits: ServerProviderRateLimits | null;
-  providerRateLimits: ServerProviderRateLimits | null;
-}): ServerProviderRateLimits | null {
-  return resolveComposerCodexUsage(input).rateLimits;
-}
 
 export type ComposerProviderState = {
   provider: ProviderDriverKind;
@@ -118,6 +52,11 @@ type TraitsRenderInput = {
   prompt: string;
   onPromptChange: (prompt: string) => void;
   planModeEnabled: boolean;
+  size?: ComposerControlSize;
+  hidden?: boolean;
+  triggerVariant?: VariantProps<typeof buttonVariants>["variant"];
+  triggerClassName?: string;
+  isComposerOwned?: boolean;
 };
 
 export function getComposerPromptInjectionState(prompt: string): ComposerPromptInjectionState {
@@ -163,7 +102,10 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
   return {
     provider,
     promptEffort,
-    modelOptionsForDispatch: buildProviderOptionSelectionsFromDescriptors(descriptors),
+    modelOptionsForDispatch: buildExplicitProviderOptionSelectionsFromDescriptors(
+      descriptors,
+      modelOptions,
+    ),
     ...(ultrathinkActive
       ? {
           composerFrameClassName: "ultrathink-frame",
@@ -189,6 +131,11 @@ function renderTraitsControl(
     prompt,
     onPromptChange,
     planModeEnabled,
+    size,
+    hidden,
+    triggerVariant,
+    triggerClassName,
+    isComposerOwned,
   } = input;
   const hasTarget = threadRef !== undefined || draftId !== undefined;
   if (
@@ -216,6 +163,11 @@ function renderTraitsControl(
       prompt={prompt}
       onPromptChange={onPromptChange}
       planModeEnabled={planModeEnabled}
+      {...(size !== undefined ? { size } : {})}
+      {...(hidden !== undefined ? { hidden } : {})}
+      {...(triggerVariant !== undefined ? { triggerVariant } : {})}
+      {...(triggerClassName !== undefined ? { triggerClassName } : {})}
+      {...(isComposerOwned ? { isComposerOwned } : {})}
     />
   );
 }

@@ -13,18 +13,17 @@
  */
 import type {
   ProviderInterruptTurnInput,
-  ProviderCompactThreadInput,
   ProviderInstanceId,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
   ProviderSession,
-  ServerProviderRateLimits,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
+  MessageId,
   ThreadId,
   ProviderTurnStartResult,
   ModelSelection,
@@ -76,15 +75,17 @@ export interface ProviderServiceShape {
     input: ProviderSendTurnInput,
   ) => Effect.Effect<ProviderTurnStartResult, ProviderServiceError>;
 
+  readonly compactThread: (
+    threadId: ThreadId,
+    modelSelection?: ProviderSendTurnInput["modelSelection"],
+    requestId?: MessageId,
+  ) => Effect.Effect<void, ProviderServiceError>;
+
   /**
    * Interrupt a running provider turn.
    */
   readonly interruptTurn: (
     input: ProviderInterruptTurnInput,
-  ) => Effect.Effect<void, ProviderServiceError>;
-
-  readonly compactThread?: (
-    input: ProviderCompactThreadInput,
   ) => Effect.Effect<void, ProviderServiceError>;
 
   /**
@@ -116,9 +117,6 @@ export interface ProviderServiceShape {
   readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
 
   /** Read quota from the exact live provider session without recovering it. */
-  readonly readSessionRateLimits: (
-    threadId: ThreadId,
-  ) => Effect.Effect<ServerProviderRateLimits | null, ProviderServiceError>;
 
   /**
    * Ensure a provider session is active for a durably bound thread.
@@ -142,8 +140,14 @@ export interface ProviderServiceShape {
   ) => Effect.Effect<ProviderInstanceRoutingInfo, ProviderServiceError>;
 
   /**
-   * Roll back provider conversation state by a number of turns, optionally
-   * using the first discarded provider turn as an exact history boundary.
+   * Reject unsupported rewind before files change, without resuming the session.
+   */
+  readonly assertConversationRollbackSupported: (
+    threadId: ThreadId,
+  ) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * Roll back provider conversation state by a number of turns.
    */
   readonly rollbackConversation: (input: {
     readonly threadId: ThreadId;

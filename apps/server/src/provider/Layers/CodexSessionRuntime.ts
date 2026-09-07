@@ -11,7 +11,6 @@ import {
   type ProviderInteractionMode,
   type ProviderRequestKind,
   type ProviderSession,
-  type ServerProviderRateLimits,
   type ProviderTurnStartResult,
   type ProviderUserInputAnswers,
   RuntimeMode,
@@ -41,12 +40,6 @@ import { buildCodexInitializeParams } from "./CodexProvider.ts";
 import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import { buildCodexDeveloperInstructions } from "../CodexDeveloperInstructions.ts";
-import { type CodexRateLimitCoordinatorShape } from "../CodexRateLimitCoordinator.ts";
-import {
-  codexRateLimitAccountKeyFromAccount,
-  normalizeCodexSessionRateLimits,
-  type CodexRateLimitAccountKey,
-} from "../CodexRateLimits.ts";
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
 
 const PROVIDER = ProviderDriverKind.make("codex");
@@ -177,7 +170,6 @@ export interface CodexSessionRuntimeOptions {
     readonly lastTurnId: TurnId;
   };
   readonly appServerArgs?: ReadonlyArray<string>;
-  readonly rateLimitCoordinator?: CodexRateLimitCoordinatorShape;
 }
 
 export interface CodexSessionRuntimeSendTurnInput {
@@ -190,52 +182,6 @@ export interface CodexSessionRuntimeSendTurnInput {
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort | undefined;
   readonly interactionMode?: ProviderInteractionMode;
-}
-
-export type CodexAccountRateLimitsReadResult = {
-  readonly account: EffectCodexSchema.V2GetAccountResponse["account"];
-  readonly accountKey: CodexRateLimitAccountKey | null;
-  readonly rateLimits?: EffectCodexSchema.V2GetAccountRateLimitsResponse;
-};
-
-type CodexAccountRateLimitsReader<E> = {
-  readonly readAccount: () => Effect.Effect<EffectCodexSchema.V2GetAccountResponse, E>;
-  readonly readRateLimits: () => Effect.Effect<EffectCodexSchema.V2GetAccountRateLimitsResponse, E>;
-};
-
-const MAX_ACCOUNT_RATE_LIMIT_READ_RETRIES = 1;
-
-/** Read Codex account limits without pairing a quota response to another account. */
-export function readCodexAccountRateLimits<E>(
-  input: CodexAccountRateLimitsReader<E>,
-): Effect.Effect<CodexAccountRateLimitsReadResult, E> {
-  const readStable = (
-    retriesRemaining: number,
-  ): Effect.Effect<CodexAccountRateLimitsReadResult, E> =>
-    Effect.gen(function* () {
-      const account = yield* input.readAccount();
-      const accountKey = codexRateLimitAccountKeyFromAccount(account.account);
-      if (accountKey === null) return { account: account.account, accountKey } as const;
-
-      const rateLimits = yield* input.readRateLimits();
-      const confirmedAccount = yield* input.readAccount();
-      const confirmedAccountKey = codexRateLimitAccountKeyFromAccount(confirmedAccount.account);
-      if (confirmedAccountKey === accountKey) {
-        return {
-          account: confirmedAccount.account,
-          accountKey: confirmedAccountKey,
-          rateLimits,
-        } as const;
-      }
-
-      if (retriesRemaining > 0) return yield* readStable(retriesRemaining - 1);
-
-      // The account changed during both reads. Keep the latest identity, but
-      // discard limits whose account cannot be established.
-      return { account: confirmedAccount.account, accountKey: confirmedAccountKey } as const;
-    });
-
-  return readStable(MAX_ACCOUNT_RATE_LIMIT_READ_RETRIES);
 }
 
 export interface CodexThreadTurnSnapshot {
@@ -251,15 +197,11 @@ export interface CodexThreadSnapshot {
 export interface CodexSessionRuntimeShape {
   readonly start: () => Effect.Effect<ProviderSession, CodexSessionRuntimeError>;
   readonly getSession: Effect.Effect<ProviderSession>;
-  readonly readRateLimits: Effect.Effect<
-    ServerProviderRateLimits | null,
-    CodexErrors.CodexAppServerError
-  >;
   readonly sendTurn: (
     input: CodexSessionRuntimeSendTurnInput,
   ) => Effect.Effect<ProviderTurnStartResult, CodexSessionRuntimeError>;
+  readonly compactThread: Effect.Effect<void, CodexSessionRuntimeError>;
   readonly interruptTurn: (turnId?: TurnId) => Effect.Effect<void, CodexSessionRuntimeError>;
-  readonly compactThread?: Effect.Effect<void, CodexSessionRuntimeError>;
   readonly readThread: Effect.Effect<CodexThreadSnapshot, CodexSessionRuntimeError>;
   readonly rollbackThread: (
     numTurns: number,
@@ -815,18 +757,29 @@ export function revertOrRollbackCodexThread(input: {
     );
 }
 
-type CodexThreadOpenResponse =
-  | CodexRpc.ClientRequestResponsesByMethod["thread/start"]
-  | CodexRpc.ClientRequestResponsesByMethod["thread/resume"]
-  | CodexRpc.ClientRequestResponsesByMethod["thread/fork"];
-
-type CodexThreadOpenMethod = "thread/start" | "thread/resume";
+const CodexThreadResumeMetadata = Schema.Struct({
+  cwd: Schema.String,
+  model: Schema.String,
+  thread: Schema.Struct({ id: Schema.String }),
+});
+const decodeCodexThreadResumeMetadata = Schema.decodeUnknownEffect(CodexThreadResumeMetadata);
 
 interface CodexThreadOpenClient {
-  readonly request: <M extends CodexThreadOpenMethod>(
-    method: M,
-    payload: CodexRpc.ClientRequestParamsByMethod[M],
-  ) => Effect.Effect<CodexRpc.ClientRequestResponsesByMethod[M], CodexErrors.CodexAppServerError>;
+  readonly raw: {
+    readonly request: (
+      method: "thread/resume",
+      payload: CodexRpc.ClientRequestParamsByMethod["thread/resume"] & {
+        readonly excludeTurns?: boolean;
+      },
+    ) => Effect.Effect<unknown, CodexErrors.CodexAppServerError>;
+  };
+  readonly request: (
+    method: "thread/start",
+    payload: CodexRpc.ClientRequestParamsByMethod["thread/start"],
+  ) => Effect.Effect<
+    CodexRpc.ClientRequestResponsesByMethod["thread/start"],
+    CodexErrors.CodexAppServerError
+  >;
 }
 
 export const openCodexThread = (input: {
@@ -838,7 +791,7 @@ export const openCodexThread = (input: {
   readonly serviceTier: CodexServiceTier | undefined;
   readonly resumeThreadId: string | undefined;
   readonly fork?: { readonly sourceThreadId: string; readonly lastTurnId: TurnId } | undefined;
-}): Effect.Effect<CodexThreadOpenResponse, CodexErrors.CodexAppServerError> => {
+}): Effect.Effect<typeof CodexThreadResumeMetadata.Type, CodexErrors.CodexAppServerError> => {
   const resumeThreadId = input.resumeThreadId;
   const startParams = buildThreadStartParams({
     cwd: input.cwd,
@@ -867,12 +820,27 @@ export const openCodexThread = (input: {
     return input.client.request("thread/start", startParams);
   }
 
-  return input.client
+  // Older providers may still return history despite excludeTurns. Only the
+  // session metadata is needed here, so unrelated historical items cannot
+  // prevent resuming a valid provider thread.
+  return input.client.raw
     .request("thread/resume", {
       threadId: resumeThreadId,
       ...startParams,
+      excludeTurns: true,
     })
     .pipe(
+      Effect.flatMap((response) =>
+        decodeCodexThreadResumeMetadata(response).pipe(
+          Effect.mapError((error) =>
+            CodexErrors.CodexAppServerRequestError.invalidPayload(
+              "thread/resume",
+              "decode-payload",
+              error,
+            ),
+          ),
+        ),
+      ),
       Effect.catchIf(isRecoverableThreadResumeError, (error) =>
         Effect.logWarning("codex app-server thread resume fell back to fresh start", {
           threadId: input.threadId,
@@ -934,43 +902,6 @@ function readNotificationThreadId(notification: CodexServerNotification): string
       return undefined;
   }
 }
-
-export const coordinateCodexRateLimitNotification = Effect.fn(
-  "CodexSessionRuntime.coordinateRateLimitNotification",
-)(function* (input: {
-  readonly coordinator: CodexRateLimitCoordinatorShape | undefined;
-  readonly sessionId: string;
-  readonly rootProviderThreadId: string | undefined;
-  readonly notification: CodexServerNotification;
-}) {
-  if (input.notification.method === "account/updated") {
-    yield* input.coordinator?.accountChanged(input.sessionId) ?? Effect.void;
-  }
-
-  if (input.notification.method === "account/rateLimits/updated") {
-    yield* input.coordinator?.invalidate(input.sessionId) ?? Effect.void;
-    return true;
-  }
-
-  if (
-    input.rootProviderThreadId &&
-    readNotificationThreadId(input.notification) === input.rootProviderThreadId
-  ) {
-    if (input.notification.method === "turn/started") {
-      yield* (
-        input.coordinator?.turnStarted(input.sessionId, input.notification.params.turn.id) ??
-          Effect.void
-      );
-    } else if (input.notification.method === "turn/completed") {
-      yield* (
-        input.coordinator?.turnSettled(input.sessionId, input.notification.params.turn.id) ??
-          Effect.void
-      );
-    }
-  }
-
-  return false;
-});
 
 export function makeMemoryConsolidationNotificationFilter(): (
   notification: CodexServerNotification,
@@ -1415,27 +1346,6 @@ export const makeCodexSessionRuntime = (
       Effect.provide(clientContext),
     );
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
-    const readAccountRateLimits = () =>
-      readCodexAccountRateLimits({
-        readAccount: () => client.request("account/read", {}),
-        readRateLimits: () => client.request("account/rateLimits/read", undefined),
-      });
-    const readRateLimits = Effect.gen(function* () {
-      const result = yield* readAccountRateLimits();
-      if (result.accountKey === null) return null;
-      const fetchedAt = yield* nowIso;
-      return normalizeCodexSessionRateLimits(result.account, result.rateLimits, fetchedAt);
-    }).pipe(
-      Effect.timeoutOrElse({
-        duration: "10 seconds",
-        orElse: () =>
-          Effect.fail(
-            CodexErrors.CodexAppServerRequestError.internalError(
-              "Timed out reading Codex account rate limits.",
-            ),
-          ),
-      }),
-    );
     const serverNotifications = yield* Queue.unbounded<CodexServerNotification>();
     const randomUUIDv4 = (purpose: CodexErrors.CodexAppServerIdentifierPurpose) =>
       crypto.randomUUIDv4.pipe(
@@ -1945,16 +1855,6 @@ export const makeCodexSessionRuntime = (
 
     const handleRawNotification = (notification: CodexServerNotification) =>
       Effect.gen(function* () {
-        const quotaNotificationIntercepted = yield* coordinateCodexRateLimitNotification({
-          coordinator: options.rateLimitCoordinator,
-          sessionId: options.threadId,
-          rootProviderThreadId: currentProviderThreadId(yield* Ref.get(sessionRef)),
-          notification,
-        });
-        if (quotaNotificationIntercepted) {
-          return;
-        }
-
         const isMemoryConsolidationNotification =
           suppressMemoryConsolidationNotification(notification);
 
@@ -2440,15 +2340,10 @@ export const makeCodexSessionRuntime = (
               return Effect.void;
             }
             const nextStatus = exitCode === 0 ? "closed" : "error";
-            return (
-              options.rateLimitCoordinator?.unregisterSession(options.threadId) ?? Effect.void
-            ).pipe(
-              Effect.andThen(
-                updateSession(sessionRef, {
-                  status: nextStatus,
-                  activeTurnId: undefined,
-                }),
-              ),
+            return updateSession(sessionRef, {
+              status: nextStatus,
+              activeTurnId: undefined,
+            }).pipe(
               Effect.andThen(
                 emitSessionEvent(
                   "session/exited",
@@ -2492,10 +2387,6 @@ export const makeCodexSessionRuntime = (
         updatedAt: yield* nowIso,
       } satisfies ProviderSession;
       yield* Ref.set(sessionRef, session);
-      yield* (
-        options.rateLimitCoordinator?.registerSession(options.threadId, readAccountRateLimits) ??
-          Effect.void
-      );
       yield* emitSessionEvent("session/ready", "Codex App Server session ready.");
       return session;
     });
@@ -2517,7 +2408,6 @@ export const makeCodexSessionRuntime = (
       }
       yield* settlePendingApprovals("cancel");
       yield* settlePendingUserInputs({});
-      yield* options.rateLimitCoordinator?.unregisterSession(options.threadId) ?? Effect.void;
       yield* updateSession(sessionRef, {
         status: "closed",
         activeTurnId: undefined,
@@ -2535,7 +2425,10 @@ export const makeCodexSessionRuntime = (
     return {
       start,
       getSession: Ref.get(sessionRef),
-      readRateLimits,
+      compactThread: Effect.gen(function* () {
+        const providerThreadId = yield* readProviderThreadId;
+        yield* client.request("thread/compact/start", { threadId: providerThreadId });
+      }),
       sendTurn: (input) =>
         Effect.gen(function* () {
           const providerThreadId = yield* readProviderThreadId;
@@ -2593,10 +2486,6 @@ export const makeCodexSessionRuntime = (
               : {}),
           } satisfies ProviderTurnStartResult;
         }),
-      compactThread: Effect.gen(function* () {
-        const providerThreadId = yield* readProviderThreadId;
-        yield* client.raw.request("thread/compact/start", { threadId: providerThreadId });
-      }).pipe(Effect.asVoid),
       interruptTurn: (turnId) =>
         Effect.gen(function* () {
           const providerThreadId = yield* readProviderThreadId;

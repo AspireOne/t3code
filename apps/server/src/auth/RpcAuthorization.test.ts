@@ -43,9 +43,12 @@ describe("RPC authorization scopes", () => {
     );
   });
 
-  it("allows remote clients to read the active thread's quota", () => {
-    expect(requiredScopeForRpcMethod(WS_METHODS.providerReadSessionRateLimits)).toBe(
+  it("requires write access to import agent session history", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.agentSessionsScan)).toBe(
       AuthOrchestrationReadScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.agentSessionsImport)).toBe(
+      AuthOrchestrationOperateScope,
     );
   });
 

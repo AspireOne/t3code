@@ -57,9 +57,9 @@ function makeReadModel(
         snoozedAt: lifecycle.snoozedAt ?? (lifecycle.snoozedUntil != null ? SETTLED_AT : null),
         pinnedAt: lifecycle.pinnedAt ?? null,
         deletedAt: null,
-        messages,
         queuedMessages: [],
         pendingTurnStart: null,
+        messages,
         proposedPlans: [],
         activities,
         checkpoints: [],
@@ -83,38 +83,24 @@ function makeSession(status: OrchestrationSession["status"]): OrchestrationSessi
 }
 
 it.layer(NodeServices.layer)("settled thread decider", (it) => {
-  it.effect("accepts compaction only for a ready session and marks it pending", () =>
+  it.effect("preserves the activity stamp when automatically settling", () =>
     Effect.gen(function* () {
-      const decided = yield* decideOrchestrationCommand({
+      const result = yield* decideOrchestrationCommand({
         command: {
-          type: "thread.compact",
-          commandId: CommandId.make("cmd-compact-ready"),
+          type: "thread.auto-settle",
+          commandId: CommandId.make("cmd-auto-settle-inactive"),
           threadId: ThreadId.make("thread-1"),
-          createdAt: NOW,
+          snapshotSequence: 0,
+          settledAt: SETTLED_AT,
         },
-        readModel: makeReadModel(null, null, makeSession("ready")),
+        readModel: makeReadModel(null),
       });
-      const events = Array.isArray(decided) ? decided : [decided];
-      expect(events.map((event) => event.type)).toEqual([
-        "thread.session-set",
-        "thread.compaction-requested",
-      ]);
-      expect(events[0]?.type === "thread.session-set" && events[0].payload.session.status).toBe(
-        "starting",
-      );
-
-      for (const status of ["starting", "running", "error", "stopped"] as const) {
-        const error = yield* decideOrchestrationCommand({
-          command: {
-            type: "thread.compact",
-            commandId: CommandId.make(`cmd-compact-${status}`),
-            threadId: ThreadId.make("thread-1"),
-            createdAt: NOW,
-          },
-          readModel: makeReadModel(null, null, makeSession(status)),
-        }).pipe(Effect.flip);
-        expect(error._tag).toBe("OrchestrationCommandInvariantError");
-      }
+      const events = Array.isArray(result) ? result : [result];
+      const settled = events.find((event) => event.type === "thread.settled");
+      expect(settled?.payload.settledAt).toBe(SETTLED_AT);
+      // updatedAt stays the command time so the row still moves on settle.
+      expect(settled?.payload.updatedAt).toBe(settled?.occurredAt);
+      expect(settled?.payload.updatedAt).not.toBe(SETTLED_AT);
     }),
   );
 
@@ -125,6 +111,7 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
         commandId: CommandId.make("cmd-auto-settle"),
         threadId: ThreadId.make("thread-1"),
         snapshotSequence: 0,
+        settledAt: SETTLED_AT,
       };
       const pinnedActive = yield* decideOrchestrationCommand({
         command,
@@ -334,6 +321,112 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
         threadId: ThreadId.make("thread-1"),
         message: SETTLE_BLOCKED_MESSAGE,
       });
+    }),
+  );
+
+  it.effect("manual settlement dismisses async questions without starting a turn", () =>
+    Effect.gen(function* () {
+      const question = (requestId: string): OrchestrationThread["activities"][number] => ({
+        id: EventId.make(requestId),
+        kind: "user-input.requested",
+        summary: "Question",
+        tone: "approval",
+        turnId: null,
+        createdAt: "1969-12-31T00:00:00.000Z",
+        payload: { requestId, responseMode: "message" },
+      });
+      const readModel = makeReadModel(null, null, makeSession("ready"), [
+        question("first"),
+        question("second"),
+        question("answered"),
+        {
+          ...question("answered"),
+          id: EventId.make("answer"),
+          createdAt: "1969-12-31T01:00:00.000Z",
+          kind: "user-input.resolved",
+        },
+      ]);
+      const command = {
+        type: "thread.settle" as const,
+        commandId: CommandId.make("settle-async"),
+        threadId: ThreadId.make("thread-1"),
+      };
+      const result = yield* decideOrchestrationCommand({ command, readModel });
+      const events = Array.isArray(result) ? result : [result];
+      expect(events.map((event) => event.type)).toEqual([
+        "thread.settled",
+        "thread.activity-appended",
+        "thread.activity-appended",
+      ]);
+      expect(events.slice(1).map((event) => event.payload)).toEqual(
+        ["first", "second"].map((requestId) => ({
+          threadId: command.threadId,
+          activity: expect.objectContaining({
+            kind: "user-input.resolved",
+            summary: "User input dismissed",
+            payload: { requestId, responseMode: "message" },
+          }),
+        })),
+      );
+      let projected = readModel;
+      for (const [index, event] of events.entries()) {
+        projected = yield* projectEvent(projected, { ...event, sequence: index + 1 });
+      }
+      expect(projected.threads[0]?.settledOverride).toBe("settled");
+      expect(projected.threads[0]?.messages).toEqual([]);
+      const repeated = yield* decideOrchestrationCommand({ command, readModel: projected });
+      expect(repeated).toMatchObject({ type: "thread.settled" });
+    }),
+  );
+
+  it.effect("async questions do not bypass automatic settlement or other blockers", () =>
+    Effect.gen(function* () {
+      const question: OrchestrationThread["activities"][number] = {
+        id: EventId.make("async-question"),
+        kind: "user-input.requested",
+        summary: "Question",
+        tone: "approval",
+        turnId: null,
+        createdAt: NOW,
+        payload: { requestId: "async-question", responseMode: "message" },
+      };
+      for (const blocker of ["auto", "running", "starting", "approval", "native"] as const) {
+        const error = yield* decideOrchestrationCommand({
+          command:
+            blocker === "auto"
+              ? {
+                  type: "thread.auto-settle",
+                  commandId: CommandId.make(`settle-${blocker}`),
+                  threadId: ThreadId.make("thread-1"),
+                  snapshotSequence: 0,
+                  settledAt: NOW,
+                }
+              : {
+                  type: "thread.settle",
+                  commandId: CommandId.make(`settle-${blocker}`),
+                  threadId: ThreadId.make("thread-1"),
+                },
+          readModel: makeReadModel(
+            null,
+            null,
+            makeSession(blocker === "running" || blocker === "starting" ? blocker : "ready"),
+            [
+              question,
+              ...(blocker === "approval" || blocker === "native"
+                ? [
+                    {
+                      ...question,
+                      id: EventId.make("blocking-request"),
+                      kind: blocker === "approval" ? "approval.requested" : "user-input.requested",
+                      payload: { requestId: "blocking-request" },
+                    },
+                  ]
+                : []),
+            ],
+          ),
+        }).pipe(Effect.flip);
+        expect(error).toMatchObject({ _tag: "OrchestrationThreadSettleBlockedError" });
+      }
     }),
   );
 

@@ -1,11 +1,7 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  applyVisibleDiffFoldOverride,
-  isFileDiffCollapsed,
-  isLineInFileDiff,
-} from "./pullRequestDiff.logic";
+import { isFileDiffCollapsed, isLineInFileDiff } from "./pullRequestDiff.logic";
 
 /** Only the hunk ranges matter here; the viewer fills the rest in when it renders. */
 function fileWithHunks(
@@ -54,9 +50,9 @@ describe("isLineInFileDiff", () => {
 describe("isFileDiffCollapsed", () => {
   const NO_TOGGLES: ReadonlySet<string> = new Set();
 
-  it("folds every file before the reader has touched anything", () => {
-    expect(isFileDiffCollapsed("a.ts", null, NO_TOGGLES)).toBe(true);
-    expect(isFileDiffCollapsed("b.ts", null, NO_TOGGLES)).toBe(true);
+  it("opens every file before the reader has touched anything", () => {
+    expect(isFileDiffCollapsed("a.ts", null, NO_TOGGLES)).toBe(false);
+    expect(isFileDiffCollapsed("b.ts", null, NO_TOGGLES)).toBe(false);
   });
 
   it("opens every file once the toolbar has asked for it", () => {
@@ -70,57 +66,16 @@ describe("isFileDiffCollapsed", () => {
     expect(isFileDiffCollapsed("b.ts", "folded", NO_TOGGLES)).toBe(true);
   });
 
-  it("keeps a file the reader opened open as the next slice arrives", () => {
-    // The file keys grow with every slice, so the answer for one already open must not depend on
-    // how many of them there are by then.
+  it("keeps a file the reader folded closed as the next slice arrives", () => {
+    // The file keys grow with every slice, so the answer for one already folded must not depend
+    // on how many of them there are by then.
     const toggled = new Set(["b.ts"]);
-    expect(isFileDiffCollapsed("b.ts", null, toggled)).toBe(false);
-    expect(isFileDiffCollapsed("c.ts", null, toggled)).toBe(true);
+    expect(isFileDiffCollapsed("b.ts", null, toggled)).toBe(true);
+    expect(isFileDiffCollapsed("c.ts", null, toggled)).toBe(false);
   });
 
   it("still answers to a toggle after either toolbar press", () => {
     expect(isFileDiffCollapsed("a.ts", "expanded", new Set(["a.ts"]))).toBe(true);
     expect(isFileDiffCollapsed("a.ts", "folded", new Set(["a.ts"]))).toBe(false);
-  });
-});
-
-describe("applyVisibleDiffFoldOverride", () => {
-  const DEFAULTS = { source: null, test: null, generated: null } as const;
-  const files = [
-    { key: "source", tier: "source", visible: true },
-    { key: "shown-test", tier: "test", visible: true },
-    { key: "hidden-test", tier: "test", visible: false },
-    { key: "actionable-generated", tier: "generated", visible: true },
-    { key: "hidden-generated", tier: "generated", visible: false },
-  ] as const;
-
-  it("sets defaults for shown tiers while preserving deferred tiers", () => {
-    const result = applyVisibleDiffFoldOverride({
-      override: "expanded",
-      shownTiers: new Set(["test"]),
-      files,
-      overridesByTier: DEFAULTS,
-      toggledFileKeys: new Set(),
-    });
-
-    expect(result.overridesByTier).toEqual({
-      source: "expanded",
-      test: "expanded",
-      generated: null,
-    });
-    expect(result.toggledFileKeys).toEqual(new Set(["actionable-generated"]));
-  });
-
-  it("changes an actionable exception without changing its deferred tier default", () => {
-    const result = applyVisibleDiffFoldOverride({
-      override: "folded",
-      shownTiers: new Set(),
-      files,
-      overridesByTier: { ...DEFAULTS, generated: "expanded" },
-      toggledFileKeys: new Set(["source", "hidden-test"]),
-    });
-
-    expect(result.overridesByTier.generated).toBe("expanded");
-    expect(result.toggledFileKeys).toEqual(new Set(["hidden-test", "actionable-generated"]));
   });
 });

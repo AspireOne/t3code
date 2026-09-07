@@ -67,6 +67,9 @@ export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;
 
 export const ProviderSendTurnInput = Schema.Struct({
   threadId: ThreadId,
+  /** Internal recovery signal. Allows an empty turn only for adapters that
+      explicitly support promptless continuation. */
+  continuation: Schema.optional(Schema.Boolean),
   input: Schema.optional(
     TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
   ),
@@ -90,11 +93,6 @@ export const ProviderInterruptTurnInput = Schema.Struct({
   turnId: Schema.optional(TurnId),
 });
 export type ProviderInterruptTurnInput = typeof ProviderInterruptTurnInput.Type;
-
-export const ProviderCompactThreadInput = Schema.Struct({
-  threadId: ThreadId,
-});
-export type ProviderCompactThreadInput = typeof ProviderCompactThreadInput.Type;
 
 export const ProviderStopSessionInput = Schema.Struct({
   threadId: ThreadId,
@@ -135,18 +133,6 @@ export class ProviderUploadFeedbackError extends Schema.TaggedErrorClass<Provide
 ) {
   override get message(): string {
     return `Failed to upload feedback for thread ${this.threadId}.`;
-  }
-}
-
-export class ProviderSessionRateLimitsError extends Schema.TaggedErrorClass<ProviderSessionRateLimitsError>()(
-  "ProviderSessionRateLimitsError",
-  {
-    threadId: ThreadId,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Failed to read provider rate limits for thread ${this.threadId}.`;
   }
 }
 
