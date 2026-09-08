@@ -191,6 +191,87 @@ it.layer(TestLayer)("CheckpointStore.layer", (it) => {
       }),
     );
 
+    it.effect("keeps present baseline files when a turn starts ignoring them", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const store = yield* CheckpointStore.CheckpointStore;
+        const threadId = ThreadId.make("new-ignore-rule");
+        const baseline = checkpointRefForThreadTurn(threadId, 99);
+        const completed = checkpointRefForThreadTurn(threadId, 1);
+        yield* writeTextFile(NodePath.join(cwd, "retained.log"), "still present\n");
+        yield* writeTextFile(NodePath.join(cwd, "removed.log"), "deleted during turn\n");
+        yield* store.captureCheckpoint({ cwd, checkpointRef: baseline });
+
+        yield* writeTextFile(NodePath.join(cwd, ".gitignore"), "*.log\n");
+        yield* (yield* FileSystem.FileSystem).remove(NodePath.join(cwd, "removed.log"));
+        yield* store.captureCheckpoint({
+          cwd,
+          checkpointRef: completed,
+          turnBaselineCheckpointRef: baseline,
+        });
+
+        expect(
+          parseGitNumstat(
+            yield* store.diffCheckpoints({
+              cwd,
+              fromCheckpointRef: baseline,
+              toCheckpointRef: completed,
+              ignoreWhitespace: false,
+              format: "numstat",
+              useTurnBaseline: true,
+            }),
+          ),
+        ).toEqual([
+          { path: ".gitignore", additions: 1, deletions: 0 },
+          { path: "removed.log", additions: 0, deletions: 1 },
+        ]);
+        expect(yield* git(cwd, ["show", `${completed}:retained.log`])).toBe("still present");
+      }),
+    );
+
+    it.effect("keeps nested turn checkpoints isolated from committed sibling changes", () =>
+      Effect.gen(function* () {
+        const root = yield* makeTmpDir();
+        yield* initRepoWithCommit(root);
+        const cwd = NodePath.join(root, "app");
+        yield* (yield* FileSystem.FileSystem).makeDirectory(cwd);
+        yield* writeTextFile(NodePath.join(cwd, "main.ts"), "baseline\n");
+        yield* writeTextFile(NodePath.join(root, "sibling.txt"), "baseline\n");
+        yield* git(root, ["add", "."]);
+        yield* git(root, ["commit", "-m", "add workspaces"]);
+        const store = yield* CheckpointStore.CheckpointStore;
+        const threadId = ThreadId.make("nested-turn-scope");
+        const baseline = checkpointRefForThreadTurn(threadId, 99);
+        const completed = checkpointRefForThreadTurn(threadId, 1);
+        yield* store.captureCheckpoint({ cwd, checkpointRef: baseline });
+
+        yield* writeTextFile(NodePath.join(root, "sibling.txt"), "committed sibling change\n");
+        yield* git(root, ["add", "sibling.txt"]);
+        yield* git(root, ["commit", "-m", "change sibling"]);
+        yield* writeTextFile(NodePath.join(cwd, "main.ts"), "turn change\n");
+        yield* store.captureCheckpoint({
+          cwd,
+          checkpointRef: completed,
+          turnBaselineCheckpointRef: baseline,
+        });
+
+        expect(
+          parseGitNumstat(
+            yield* store.diffCheckpoints({
+              cwd,
+              fromCheckpointRef: baseline,
+              toCheckpointRef: completed,
+              ignoreWhitespace: false,
+              format: "numstat",
+              useTurnBaseline: true,
+            }),
+          ),
+        ).toEqual([{ path: "app/main.ts", additions: 1, deletions: 1 }]);
+        expect(yield* git(cwd, ["show", `${completed}:sibling.txt`])).toBe("baseline");
+      }),
+    );
+
     it.effect("returns full oversized checkpoint diffs without truncation", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();

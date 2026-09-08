@@ -738,12 +738,13 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         .pipe(Effect.ignore);
 
       yield* Effect.gen(function* () {
-        const headExists = yield* hasHeadCommit(input.cwd);
-        if (headExists) {
+        const baseline = input.turnBaselineCheckpointRef;
+        const seedRevision = baseline ?? ((yield* hasHeadCommit(input.cwd)) ? "HEAD" : null);
+        if (seedRevision !== null) {
           yield* execute({
             operation,
             cwd: input.cwd,
-            args: ["read-tree", "HEAD"],
+            args: ["read-tree", seedRevision],
             env: commitEnv,
           });
         }
@@ -772,7 +773,6 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           });
         }
 
-        const baseline = input.turnBaselineCheckpointRef;
         const message = `t3 checkpoint ref=${input.checkpointRef}`;
         const commitTreeResult = yield* execute({
           operation,
