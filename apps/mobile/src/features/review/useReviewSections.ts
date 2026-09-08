@@ -152,6 +152,7 @@ export function useReviewSections(input: {
       enabled && activeCheckpoint ? Math.max(0, activeCheckpoint.checkpointTurnCount - 1) : null,
     toTurnCount: enabled ? (activeCheckpoint?.checkpointTurnCount ?? null) : null,
     ignoreWhitespace: false,
+    cacheScope: activeCheckpoint?.turnId ?? null,
   });
 
   useEffect(() => {
