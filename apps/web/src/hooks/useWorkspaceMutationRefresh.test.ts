@@ -1,10 +1,15 @@
-import { EventId, type OrchestrationThreadActivity } from "@t3tools/contracts";
-import { describe, expect, it } from "vite-plus/test";
+import { EnvironmentId, EventId, type OrchestrationThreadActivity } from "@t3tools/contracts";
+import { createElement } from "react";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   latestWorkspaceMutationId,
+  useWorkspaceMutationVcsStatusRefresh,
   workspaceMutationRefreshToken,
 } from "./useWorkspaceMutationRefresh";
+
+vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 
 function activity(
   id: string,
@@ -58,5 +63,35 @@ describe("workspace mutation refresh", () => {
       workspaceMutationRefreshToken("diff:/repo", "event-1"),
     );
     expect(workspaceMutationRefreshToken("file:/repo/README.md", null)).toBeNull();
+  });
+
+  it("rescans Git status once for each completed workspace mutation", async () => {
+    const refreshStatus = vi.fn();
+    const environmentId = EnvironmentId.make("environment-1");
+    let renderer: ReactTestRenderer | undefined;
+    const Probe = ({ mutationId }: { readonly mutationId: string | null }) => {
+      useWorkspaceMutationVcsStatusRefresh({
+        environmentId,
+        cwd: "/repo",
+        mutationId,
+        refreshStatus,
+        resourceKey: "git-status:thread-1:/repo",
+      });
+      return null;
+    };
+
+    await act(() => {
+      renderer = create(createElement(Probe, { mutationId: null }));
+    });
+    await act(() => renderer?.update(createElement(Probe, { mutationId: "event-1" })));
+    await act(() => renderer?.update(createElement(Probe, { mutationId: "event-1" })));
+    await act(() => renderer?.update(createElement(Probe, { mutationId: "event-2" })));
+
+    expect(refreshStatus.mock.calls).toEqual([
+      [{ environmentId, input: { cwd: "/repo" } }],
+      [{ environmentId, input: { cwd: "/repo" } }],
+    ]);
+
+    await act(() => renderer?.unmount());
   });
 });

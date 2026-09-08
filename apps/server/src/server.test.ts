@@ -7504,6 +7504,15 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             switchRef: (input) => Effect.succeed({ refName: input.refName }),
           },
           vcsStatusBroadcaster: {
+            refreshLocalStatus: () =>
+              Effect.succeed({
+                isRepo: true,
+                hasPrimaryRemote: true,
+                isDefaultRef: true,
+                refName: "main",
+                hasWorkingTreeChanges: true,
+                workingTree: { files: [], insertions: 1, deletions: 0 },
+              }),
             refreshStatus: () =>
               Effect.succeed({
                 isRepo: true,
@@ -7568,6 +7577,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
       assert.equal(refreshedStatus.isRepo, true);
+
+      const refreshedLocalStatus = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.vcsRefreshLocalStatus]({ cwd: "/tmp/repo" }),
+        ),
+      );
+      assert.equal(refreshedLocalStatus.hasWorkingTreeChanges, true);
+      assert.equal(refreshedLocalStatus.workingTree.insertions, 1);
 
       const stackedEvents = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>

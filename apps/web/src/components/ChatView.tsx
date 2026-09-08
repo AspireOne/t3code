@@ -139,7 +139,7 @@ import {
 import { useUiStateStore } from "../uiStateStore";
 import {
   latestWorkspaceMutationId,
-  useWorkspaceMutationRefresh,
+  useWorkspaceMutationVcsStatusRefresh,
 } from "../hooks/useWorkspaceMutationRefresh";
 import {
   buildPlanImplementationThreadTitle,
@@ -1474,6 +1474,9 @@ export default function ChatView(props: ChatViewProps) {
     reportFailure: false,
   });
   const switchGitRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
+  const refreshLocalVcsStatus = useAtomCommand(vcsEnvironment.refreshLocalStatus, {
+    reportFailure: false,
+  });
   const setThreadRuntimeMode = useAtomCommand(threadEnvironment.setRuntimeMode, {
     reportFailure: false,
   });
@@ -3181,10 +3184,11 @@ export default function ChatView(props: ChatViewProps) {
           input: { cwd: gitStatusCwd },
         }),
   );
-  useWorkspaceMutationRefresh({
-    enabled: gitStatusCwd !== null,
+  useWorkspaceMutationVcsStatusRefresh({
+    environmentId,
+    cwd: gitStatusCwd,
     mutationId: workspaceMutationId,
-    refresh: gitStatusQuery.refresh,
+    refreshStatus: refreshLocalVcsStatus,
     resourceKey: `git-status:${activeThreadKey ?? ""}:${gitStatusCwd ?? ""}`,
   });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
