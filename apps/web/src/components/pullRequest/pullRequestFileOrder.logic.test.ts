@@ -13,6 +13,18 @@ function order(files: ReadonlyArray<FileDiffMetadata>): Array<string> {
 }
 
 describe("orderDiffFiles", () => {
+  it("preserves every same-path patch in its original order", () => {
+    const deletion = file("src/a.ts", ['import "./b";']);
+    const addition = file("src/a.ts", ["target.ts"]);
+    const dependency = file("src/b.ts");
+
+    expect(orderDiffFiles([deletion, addition, dependency])).toEqual([
+      dependency,
+      deletion,
+      addition,
+    ]);
+  });
+
   it("places source before tests and generated files across path conventions", () => {
     const source = ["src/app.ts", "src/dist.ts", "src/testing.ts"];
     const tests = [

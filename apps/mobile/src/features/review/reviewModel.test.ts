@@ -135,6 +135,26 @@ describe("buildReviewSectionItems", () => {
 });
 
 describe("buildReviewParsedDiff", () => {
+  it.each(["a", "b"])("preserves a real %s directory in parsed paths", (directory) => {
+    const path = `${directory}/file.ts`;
+    const parsed = buildReviewParsedDiff(
+      [
+        `diff --git a/${path} b/${path}`,
+        `--- a/${path}`,
+        `+++ b/${path}`,
+        "@@ -1 +1 @@",
+        "-before",
+        "+after",
+        "",
+      ].join("\n"),
+      "paths",
+    );
+
+    expect(parsed.kind).toBe("files");
+    if (parsed.kind !== "files") throw new Error("Expected parsed files");
+    expect(parsed.files[0]?.path).toBe(path);
+  });
+
   it("builds renderable rows from a unified patch", () => {
     const parsed = buildReviewParsedDiff(
       [

@@ -726,6 +726,7 @@ function PullRequestCodeTab({
           size="icon-micro"
           variant="ghost-muted"
           aria-expanded={!collapsed}
+          data-diff-collapse-control=""
           aria-label={collapsed ? "Expand diff" : "Collapse diff"}
           className="mr-1 rounded hover:bg-transparent"
           onClick={(event) => {
@@ -1371,12 +1372,12 @@ function PullRequestCodeTab({
                 return;
               }
               if (node.hasAttribute("data-diffs-header")) {
-                const filePath = node.querySelector("[data-title]")?.textContent?.trim();
-                if (filePath === undefined || filePath === "") return;
-                const item = items.find(
-                  (candidate) => resolveFileDiffPath(candidate.fileDiff) === filePath,
-                );
-                if (item !== undefined) toggleFile(item.id);
+                const root = node.getRootNode();
+                if (root instanceof ShadowRoot) {
+                  root.host
+                    .querySelector<HTMLButtonElement>("[data-diff-collapse-control]")
+                    ?.click();
+                }
                 return;
               }
             }

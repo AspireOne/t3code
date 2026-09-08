@@ -59,7 +59,7 @@ function createDiffFileContentsLoader(
     const newFile = {
       name: newPath,
       contents: contents.newContents,
-      cacheKey: `${cacheKey}:new:${newPath}`,
+      cacheKey: `${cacheKey}:${fileDiff.type}:new:${newPath}`,
     };
     if (fileDiff.type === "rename-pure") {
       return { oldFile: null, newFile };
@@ -68,7 +68,7 @@ function createDiffFileContentsLoader(
       oldFile: {
         name: oldPath,
         contents: contents.oldContents,
-        cacheKey: `${cacheKey}:old:${oldPath}`,
+        cacheKey: `${cacheKey}:${fileDiff.type}:old:${oldPath}`,
       },
       newFile,
     };

@@ -34,12 +34,12 @@ describe("createGitDiffFileContentsLoader", () => {
       oldFile: {
         name: "src/old-name.ts",
         contents: "before\n",
-        cacheKey: "comparison-1:old:src/old-name.ts",
+        cacheKey: "comparison-1:rename-changed:old:src/old-name.ts",
       },
       newFile: {
         name: "src/new-name.ts",
         contents: "after\n",
-        cacheKey: "comparison-1:new:src/new-name.ts",
+        cacheKey: "comparison-1:rename-changed:new:src/new-name.ts",
       },
     });
     expect(getDiffFileContents).toHaveBeenCalledWith({
@@ -54,6 +54,28 @@ describe("createGitDiffFileContentsLoader", () => {
         newPath: "src/new-name.ts",
       },
     });
+  });
+
+  it("isolates empty sides from file contents for same-path delete/add records", async () => {
+    const load = createGitDiffFileContentsLoader(
+      async ({ input }) =>
+        AsyncResult.success({
+          oldContents: input.changeType === "deleted" ? "original\n" : "",
+          newContents: input.changeType === "new" ? "target\n" : "",
+        }),
+      SOURCE,
+    );
+    const deleted = await load({
+      ...fileDiff("deleted"),
+      name: "AGENTS.md",
+      prevName: "AGENTS.md",
+    });
+    const added = await load({ ...fileDiff("new"), name: "AGENTS.md", prevName: "AGENTS.md" });
+
+    expect(deleted.oldFile?.contents).toBe("original\n");
+    expect(added.oldFile?.contents).toBe("");
+    expect(deleted.oldFile?.cacheKey).not.toBe(added.oldFile?.cacheKey);
+    expect(deleted.newFile.cacheKey).not.toBe(added.newFile.cacheKey);
   });
 
   it("loads a pure rename from its one shared file", async () => {
