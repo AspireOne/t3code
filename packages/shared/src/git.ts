@@ -11,6 +11,22 @@ import * as Result from "effect/Result";
 import { detectSourceControlProviderFromRemoteUrl } from "./sourceControl.ts";
 
 export const WORKTREE_BRANCH_PREFIX = "t3code";
+export const GIT_DIFF_TRUNCATION_MARKER = "\n\n[truncated]";
+
+export function splitGitDiffTruncationMarker(diff: string): {
+  readonly text: string;
+  readonly truncated: boolean;
+} {
+  const trimmed = diff.trimEnd();
+  if (!trimmed.endsWith(GIT_DIFF_TRUNCATION_MARKER)) {
+    return { text: trimmed, truncated: false };
+  }
+
+  return {
+    text: trimmed.slice(0, -GIT_DIFF_TRUNCATION_MARKER.length).trimEnd(),
+    truncated: true,
+  };
+}
 // Canonical form is `t3code/<8 hex>`. Older mobile builds generated `t3code/<uuid>`
 // via Crypto.randomUUID() (always RFC 4122 v4), so the matcher also accepts exactly
 // that shape — version nibble `4`, variant nibble `[89ab]` — to keep those threads

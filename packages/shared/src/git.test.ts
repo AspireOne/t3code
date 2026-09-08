@@ -8,8 +8,23 @@ import {
   normalizeGitRemoteUrl,
   parseGitHubRepositoryNameWithOwnerFromRemoteUrl,
   parseOriginUrlFromGitConfig,
+  splitGitDiffTruncationMarker,
   WORKTREE_BRANCH_PREFIX,
 } from "./git.ts";
+
+describe("splitGitDiffTruncationMarker", () => {
+  it("separates a terminal server marker from the available patch", () => {
+    expect(splitGitDiffTruncationMarker("diff patch\n\n[truncated]\n")).toEqual({
+      text: "diff patch",
+      truncated: true,
+    });
+  });
+
+  it("preserves a file line containing the marker text at the end of the patch", () => {
+    const diff = "diff patch\n+[truncated]";
+    expect(splitGitDiffTruncationMarker(diff)).toEqual({ text: diff, truncated: false });
+  });
+});
 
 describe("normalizeGitRemoteUrl", () => {
   it("canonicalizes equivalent GitHub remotes across protocol variants", () => {

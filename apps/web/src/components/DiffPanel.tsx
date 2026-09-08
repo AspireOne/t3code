@@ -9,6 +9,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
 import type { ScopedThreadRef, TurnId } from "@t3tools/contracts";
+import { splitGitDiffTruncationMarker } from "@t3tools/shared/git";
 import {
   ArrowRightIcon,
   CheckIcon,
@@ -383,8 +384,15 @@ export default function DiffPanel({
   ];
   const gitDiff = selectedGitSource?.diff;
 
-  const selectedPatch = selectedTurn ? activeCheckpointDiff.data?.diff : gitDiff;
-  const isSelectedPatchTruncated = !selectedTurn && selectedGitSource?.truncated === true;
+  const selectedPatchResult = selectedTurn
+    ? activeCheckpointDiff.data
+      ? splitGitDiffTruncationMarker(activeCheckpointDiff.data.diff)
+      : null
+    : null;
+  const selectedPatch = selectedTurn ? selectedPatchResult?.text : gitDiff;
+  const isSelectedPatchTruncated = selectedTurn
+    ? selectedPatchResult?.truncated === true
+    : selectedGitSource?.truncated === true;
   const isLoadingSelectedPatch = selectedTurn
     ? activeCheckpointDiff.isPending
     : branchDiffPreview.isPending;

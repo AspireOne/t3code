@@ -932,6 +932,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         allowNonZeroExit: true,
         maxOutputBytes: CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
         outputMode: input.format === "numstat" ? "error" : "truncate",
+        appendTruncationMarker: input.format !== "numstat",
       });
 
       if (result.exitCode !== 0) {

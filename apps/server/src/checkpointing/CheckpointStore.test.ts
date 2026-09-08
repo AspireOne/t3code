@@ -456,6 +456,15 @@ it.layer(TestLayer)("CheckpointStore.layer", (it) => {
           { path: "README.md", additions: lineCount, deletions: lineCount },
         ]);
         expect(numstat.length).toBeLessThan(100);
+
+        const patch = yield* checkpointStore.diffCheckpoints({
+          cwd: tmp,
+          fromCheckpointRef,
+          toCheckpointRef,
+          ignoreWhitespace: false,
+        });
+        expect(patch).toContain("diff --git a/README.md b/README.md");
+        expect(patch).toMatch(/\[truncated\]$/);
       }),
     );
 

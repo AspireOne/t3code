@@ -1,6 +1,7 @@
 import { parsePatchFiles } from "@pierre/diffs/utils/parsePatchFiles";
 import type { ChangeTypes, FileDiffMetadata } from "@pierre/diffs/types";
 import type { OrchestrationCheckpointSummary, ReviewDiffPreviewSource } from "@t3tools/contracts";
+import { splitGitDiffTruncationMarker } from "@t3tools/shared/git";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 import * as Order from "effect/Order";
@@ -138,21 +139,6 @@ function stripGitPrefix(pathValue: string | undefined): string | null {
 
 function stripTrailingNewline(value: string): string {
   return value.endsWith("\n") ? value.slice(0, -1) : value;
-}
-
-function splitTruncationMarker(diff: string): {
-  readonly text: string;
-  readonly truncated: boolean;
-} {
-  const trimmed = diff.trimEnd();
-  if (!trimmed.endsWith("[truncated]")) {
-    return { text: trimmed, truncated: false };
-  }
-
-  return {
-    text: trimmed.replace(/\n*\[truncated\]\s*$/, "").trimEnd(),
-    truncated: true,
-  };
 }
 
 function runDiffParserSilently<T>(callback: () => T): T {
@@ -478,7 +464,7 @@ export function buildReviewParsedDiff(
     return { kind: "empty" };
   }
 
-  const { text, truncated } = splitTruncationMarker(normalized);
+  const { text, truncated } = splitGitDiffTruncationMarker(normalized);
   if (text.length === 0) {
     return { kind: "empty" };
   }
