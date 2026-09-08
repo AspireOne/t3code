@@ -27,7 +27,16 @@ function toGitStatus(file: FileDiffMetadata): GitStatus {
 export function diffFileTreeEntries(
   files: ReadonlyArray<FileDiffMetadata>,
 ): ReadonlyArray<DiffFileTreeEntry> {
-  return files.map((file) => ({ path: resolveFileDiffPath(file), status: toGitStatus(file) }));
+  const entries = new Map<string, DiffFileTreeEntry>();
+  for (const file of files) {
+    const path = resolveFileDiffPath(file);
+    const existing = entries.get(path);
+    entries.set(path, {
+      path,
+      status: existing === undefined ? toGitStatus(file) : "modified",
+    });
+  }
+  return [...entries.values()];
 }
 
 /**

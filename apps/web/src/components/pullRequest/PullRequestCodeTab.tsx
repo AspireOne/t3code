@@ -36,7 +36,7 @@ import { pullRequestFindingKey, type PullRequestFinding } from "./pullRequestDet
 import { canEditPullRequestComment } from "./pullRequestEditing.logic";
 import { orderDiffFiles } from "./pullRequestFileOrder.logic";
 import {
-  buildFileDiffRenderKey,
+  buildFileDiffRenderKeys,
   fnv1a32,
   getDiffLineStat,
   getRenderablePatch,
@@ -443,10 +443,12 @@ function PullRequestCodeTab({
     return placed;
   }, [commit, detail.reviewThreads, files]);
 
+  const itemKeys = useMemo(() => buildFileDiffRenderKeys(files), [files]);
+
   const items = useMemo<CodeViewDiffItem<ReviewAnnotationGroup>[]>(
     () =>
-      files.map((fileDiff) => {
-        const fileKey = buildFileDiffRenderKey(fileDiff);
+      files.map((fileDiff, fileIndex) => {
+        const fileKey = itemKeys[fileIndex]!;
         const path = resolveFileDiffPath(fileDiff);
         // One annotation per line, so a line that already carries a conversation shows a new
         // comment underneath it rather than in place of it.
@@ -469,6 +471,7 @@ function PullRequestCodeTab({
         for (const thread of detail.reviewThreads) {
           if (thread.path !== path || thread.line === null) continue;
           if (!placedThreadIds.has(thread.id)) continue;
+          if (!isLineInFileDiff(fileDiff, thread.side, thread.line)) continue;
           groupAt(thread.side, thread.line).threads.push(thread);
         }
         // Pending comments anchor to the head diff exactly like host threads do, so a
@@ -477,6 +480,7 @@ function PullRequestCodeTab({
           for (const comment of pendingComments) {
             if (comment.path !== path) continue;
             const anchor = getReviewPositionAnchor(comment.position);
+            if (!isLineInFileDiff(fileDiff, anchor.side, anchor.line)) continue;
             groupAt(anchor.side, anchor.line).pending.push(comment);
           }
         }
@@ -535,6 +539,7 @@ function PullRequestCodeTab({
       detail.reviewThreads,
       draft,
       files,
+      itemKeys,
       foldOverride,
       pendingComments,
       placedThreadIds,
@@ -638,8 +643,7 @@ function PullRequestCodeTab({
       if (!range || !canCommentOnLines) return;
       const item = context.item;
       if (item.type !== "diff") return;
-      const file = files.find((candidate) => buildFileDiffRenderKey(candidate) === item.id);
-      if (!file) return;
+      const file = item.fileDiff;
       // A range collapses to its last line: only GitHub carries a multi-line comment, and one
       // that silently lost its first line on the other hosts would be worse than one line.
       const path = resolveFileDiffPath(file);
@@ -654,7 +658,7 @@ function PullRequestCodeTab({
         range,
       });
     },
-    [canCommentOnLines, files],
+    [canCommentOnLines],
   );
 
   // Built here because the parsed diff only lives here, and built by the same function the
@@ -662,7 +666,7 @@ function PullRequestCodeTab({
   // the hunks would only be a second place for it to drift.
   const finishSelection = useCallback(
     (anchor: DraftAnchor, text: string, onFinish: (comment: ReviewCommentContext) => void) => {
-      const file = files.find((candidate) => buildFileDiffRenderKey(candidate) === anchor.fileKey);
+      const file = items.find((candidate) => candidate.id === anchor.fileKey)?.fileDiff;
       const comment =
         file === undefined
           ? null
@@ -679,7 +683,7 @@ function PullRequestCodeTab({
       setSelectedLines(null);
       if (comment !== null) onFinish(comment);
     },
-    [detail.number, files],
+    [detail.number, items],
   );
 
   // The viewer's SlotPortals memoizes each visible file's header/annotation portal on these

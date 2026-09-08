@@ -29,6 +29,12 @@ describe("diffFileTreeEntries", () => {
       { path: "README.md", status: "modified" },
     ]);
   });
+
+  it("represents duplicate patch records for one path as one modified file", () => {
+    expect(diffFileTreeEntries([file("deleted", "AGENTS.md"), file("new", "AGENTS.md")])).toEqual([
+      { path: "AGENTS.md", status: "modified" },
+    ]);
+  });
 });
 
 describe("collectDirectoryPaths", () => {
