@@ -969,6 +969,52 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("shows staged, unstaged, and untracked files before the first commit", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* driver.initRepo({ cwd });
+        yield* writeTextFile(cwd, "initial.ts", "staged\n");
+        yield* git(cwd, ["add", "initial.ts"]);
+        yield* writeTextFile(cwd, "initial.ts", "staged\nunstaged\n");
+        yield* writeTextFile(cwd, "untracked.ts", "untracked\n");
+
+        const preview = yield* driver.getReviewDiffPreview({
+          cwd,
+          ignoreWhitespace: false,
+        });
+        const workingTree = preview.sources.find((source) => source.kind === "working-tree")?.diff;
+
+        assert.include(workingTree, "diff --git a/initial.ts b/initial.ts");
+        assert.include(workingTree, "+staged");
+        assert.include(workingTree, "+unstaged");
+        assert.include(workingTree, "diff --git a/untracked.ts b/untracked.ts");
+        assert.equal(workingTree?.match(/diff --git a\/initial\.ts b\/initial\.ts/g)?.length, 1);
+      }),
+    );
+
+    it.effect("reports an invalid review base instead of returning an empty branch diff", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const error = yield* driver
+          .getReviewDiffPreview({
+            cwd,
+            baseRef: "missing-review-base",
+            ignoreWhitespace: false,
+          })
+          .pipe(Effect.flip);
+
+        assert.deepInclude(error, {
+          _tag: "GitCommandError",
+          operation: "GitVcsDriver.getReviewDiffPreview.base",
+          detail: "Git command exited with a non-zero status.",
+        });
+      }),
+    );
+
     it.effect("loads full file contents for working-tree diff expansion", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();

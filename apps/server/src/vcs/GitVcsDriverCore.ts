@@ -2360,37 +2360,60 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           )
         : null);
 
-    const dirtyTrackedResult = yield* executeGit(
+    const dirtyTrackedArgs = (baseRevision: string) => [
+      "diff",
+      "--patch",
+      "--no-color",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--minimal",
+      ...PATCH_RENDER_PREFIX_ARGS,
+      ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
+      baseRevision,
+      "--",
+    ];
+    const headDiffArgs = dirtyTrackedArgs("HEAD");
+    let dirtyTrackedResult = yield* executeGitWithStableDiagnostics(
       "GitVcsDriver.getReviewDiffPreview.dirtyTracked",
       input.cwd,
-      [
-        "diff",
-        "--patch",
-        "--no-color",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--minimal",
-        ...PATCH_RENDER_PREFIX_ARGS,
-        ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
-        "HEAD",
-        "--",
-      ],
+      headDiffArgs,
       {
+        allowNonZeroExit: true,
         maxOutputBytes: REVIEW_DIFF_PATCH_MAX_OUTPUT_BYTES,
         appendTruncationMarker: true,
       },
-    ).pipe(
-      Effect.orElseSucceed(() => ({
-        exitCode: 0,
-        stdout: "",
-        stderr: "",
-        stdoutTruncated: false,
-        stderrTruncated: false,
-      })),
     );
-    const dirtyUntracked = yield* readUntrackedReviewDiffs(input.cwd).pipe(
-      Effect.orElseSucceed(() => ({ diff: "", truncated: false })),
-    );
+    if (dirtyTrackedResult.exitCode !== 0) {
+      if (!isUnbornHeadStderr(dirtyTrackedResult.stderr)) {
+        return yield* new GitCommandError({
+          ...gitCommandContext({
+            operation: "GitVcsDriver.getReviewDiffPreview.dirtyTracked",
+            cwd: input.cwd,
+            args: headDiffArgs,
+          }),
+          detail: "Failed to read working-tree changes.",
+          exitCode: dirtyTrackedResult.exitCode,
+          stdoutLength: dirtyTrackedResult.stdout.length,
+          stderrLength: dirtyTrackedResult.stderr.length,
+        });
+      }
+      const emptyTree = (yield* executeGit(
+        "GitVcsDriver.getReviewDiffPreview.emptyTree",
+        input.cwd,
+        ["hash-object", "-t", "tree", "--stdin"],
+        { stdin: "" },
+      )).stdout.trim();
+      dirtyTrackedResult = yield* executeGit(
+        "GitVcsDriver.getReviewDiffPreview.initialDirtyTracked",
+        input.cwd,
+        dirtyTrackedArgs(emptyTree),
+        {
+          maxOutputBytes: REVIEW_DIFF_PATCH_MAX_OUTPUT_BYTES,
+          appendTruncationMarker: true,
+        },
+      );
+    }
+    const dirtyUntracked = yield* readUntrackedReviewDiffs(input.cwd);
     const dirtyDiff = [dirtyTrackedResult.stdout.trimEnd(), dirtyUntracked.diff.trimEnd()]
       .filter((diff) => diff.length > 0)
       .join("\n");
@@ -2415,14 +2438,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               maxOutputBytes: REVIEW_DIFF_PATCH_MAX_OUTPUT_BYTES,
               appendTruncationMarker: true,
             },
-          ).pipe(
-            Effect.orElseSucceed(() => ({
-              exitCode: 0,
-              stdout: "",
-              stderr: "",
-              stdoutTruncated: false,
-              stderrTruncated: false,
-            })),
           )
         : null;
     const baseDiff = baseResult?.stdout ?? "";
