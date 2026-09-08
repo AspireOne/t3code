@@ -8,7 +8,7 @@ import {
 } from "./diffFileTree.logic";
 
 function file(type: FileDiffMetadata["type"], name: string, prevName = name): FileDiffMetadata {
-  return { type, name: `b/${name}`, prevName: `a/${prevName}` } as FileDiffMetadata;
+  return { type, name, prevName } as FileDiffMetadata;
 }
 
 describe("diffFileTreeEntries", () => {

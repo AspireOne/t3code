@@ -6,6 +6,8 @@ import {
   buildPatchCacheKey,
   getDiffLineStat,
   getRenderablePatch,
+  resolveFileDiffPath,
+  resolveFileDiffPreviousPath,
 } from "./diffRendering";
 
 describe("buildPatchCacheKey", () => {
@@ -32,6 +34,42 @@ describe("buildPatchCacheKey", () => {
 });
 
 describe("getRenderablePatch", () => {
+  it.each(["a", "b"])("preserves a real top-level %s directory in parsed paths", (directory) => {
+    const path = `${directory}/example.ts`;
+    const patch = [
+      `diff --git a/${path} b/${path}`,
+      "index 1111111..2222222 100644",
+      `--- a/${path}`,
+      `+++ b/${path}`,
+      "@@ -1 +1 @@",
+      "-before",
+      "+after",
+    ].join("\n");
+
+    const parsed = getRenderablePatch(patch);
+    expect(parsed?.kind).toBe("files");
+    if (parsed?.kind !== "files" || !parsed.files[0]) return;
+
+    expect(resolveFileDiffPath(parsed.files[0])).toBe(path);
+    expect(resolveFileDiffPreviousPath(parsed.files[0])).toBe(path);
+  });
+
+  it("preserves top-level a/ and b/ directories across a rename", () => {
+    const patch = [
+      "diff --git a/a/old.ts b/b/new.ts",
+      "similarity index 100%",
+      "rename from a/old.ts",
+      "rename to b/new.ts",
+    ].join("\n");
+
+    const parsed = getRenderablePatch(patch);
+    expect(parsed?.kind).toBe("files");
+    if (parsed?.kind !== "files" || !parsed.files[0]) return;
+
+    expect(resolveFileDiffPreviousPath(parsed.files[0])).toBe("a/old.ts");
+    expect(resolveFileDiffPath(parsed.files[0])).toBe("b/new.ts");
+  });
+
   it("compacts partial hunk render offsets for virtualized review diffs", () => {
     const patch = [
       "diff --git a/example.ts b/example.ts",
