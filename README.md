@@ -4,6 +4,66 @@ T3 Code is an "agent harness control surface". It enables control of the agents 
 
 Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCode, and Google Antigravity. If they're set up on your computer, T3 Code can control them.
 
+## AspireOne fork additions
+
+Compared with the upstream release this fork tracks, the notable fork work is:
+
+- Windows/WSL build and install workflow: `build-install-windows.sh` builds
+  from WSL, stages installers outside WSL, supplies WSL `node-pty` resources,
+  validates artifacts and health, backs up state, and tolerates delayed
+  installation relaunches.
+- Fast, safe Windows packaging: verified source/toolchain-keyed build and
+  dependency caches, same-version WSL bundle refreshes, isolated packaging
+  copies, checksums, timings, retries, and bounded cache retention.
+- WSL authentication: forwards the Windows/WSL `SSH_AUTH_SOCK` into
+  WSL-hosted server backends.
+- Windows system tray: closing the desktop window hides it while T3 Code keeps
+  running; tray **Open**/**Close** actions and updater/session shutdown paths
+  remain clean.
+- Upstream-release awareness: desktop checks for newer stable upstream
+  releases, shows a persistent notification, and links directly to the exact
+  release; synchronization, build, and install remain explicit maintainer
+  steps.
+- Nested project workspaces: Git status, untracked files, checkpoints,
+  reviews, and source-control operations work when a project is below its
+  repository root.
+- Git status at a glance: the branch toolbar shows staged, modified, deleted,
+  renamed, untracked, conflicted, ahead, and behind counts, and its status
+  control refreshes status after workspace changes and opens the working-tree
+  diff.
+- Pull-request and status UI fixes: closed or merged PRs no longer occupy the
+  composer PR pill, while remaining available from the sidebar.
+- Turn-scoped review checkpoints: turn diffs use the turn's own baseline and
+  exclude edits made between turns; overlapping turns are reported as
+  unavailable for attribution while restore checkpoints remain available.
+- Diff and VCS fidelity: preserve exact paths and renames, repeated-path
+  records, initial-commit changes, parsed directory paths, and patch ordering;
+  refresh after workspace mutations, isolate replacement/content caches, and
+  disclose truncated diffs.
+- Codex conversation branching: `/fork`, **Fork thread**, and **Fork through
+  this turn** create independent conversations with the selected history,
+  attachments, and checkpoints on web, desktop, and mobile without rewinding
+  the shared workspace.
+- Safer Codex reverts: recover stopped sessions, revert paginated threads by
+  exact turn boundaries, and remove reverted user prompts from the live
+  timeline.
+- Durable follow-up queues: queue messages while an agent works, retain
+  attachments and composer context, deliver them in order after successful
+  turns, and remove or move queued items back for editing; `/compact` cannot be
+  queued, and removed queued items do not leave stale pending messages behind.
+- Custom thread titles: configure the instructions used to generate automatic
+  thread titles.
+- Quick thread rename: **Rename thread** in the command palette opens the
+  sidebar's inline editor, including hidden or lazily mounted mobile sidebars,
+  while preserving title-field focus.
+- Desktop thread actions: **Delete thread** is available for the active thread
+  in the command palette, and **Restart T3 Code** gracefully relaunches the
+  desktop app with duplicate requests made single-flight.
+- Floating command-menu preselection: the command palette automatically selects
+  the first enabled result, preserves a still-visible explicit selection, and
+  keeps a valid result selected while query/deferred-query results change;
+  browsing and remote-clone flows intentionally opt out.
+
 ## "Wait, what are you selling me?"
 
 Nothing. We built T3 Code because we wanted the best possible development experience with agents. We were inspired by existing solutions like the Codex desktop app, Conductor, Claude Desktop and Cursor Glass, but none met our bar.
