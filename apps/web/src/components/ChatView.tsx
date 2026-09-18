@@ -117,6 +117,7 @@ import { useDiffPanelStore } from "../diffPanelStore";
 import {
   collapseExpandedComposerCursor,
   type ComposerSubmissionIntent,
+  isStandaloneForkCommand,
   parseStandaloneComposerSlashCommand,
 } from "../composer-logic";
 import {
@@ -149,7 +150,7 @@ import {
 import { useUiStateStore } from "../uiStateStore";
 import {
   latestWorkspaceMutationId,
-  useWorkspaceMutationRefresh,
+  useWorkspaceMutationVcsStatusRefresh,
 } from "../hooks/useWorkspaceMutationRefresh";
 import {
   buildPlanImplementationThreadTitle,
@@ -343,6 +344,7 @@ import { useProjectClone } from "../state/projectClones";
 import { projectCloneDisplayName, projectCloneProgressSummary } from "@t3tools/contracts";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
+  readThreadCanFork,
   useProject,
   useProjects,
   useThread,
@@ -525,6 +527,29 @@ const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_USAGE_LIMIT_SOURCES: UsageLimitSourceSnapshots = [];
 const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
+
+function mergeComposerPrompts(existing: string, restored: string): string {
+  const existingText = existing.trimEnd();
+  const restoredText = restored.trim();
+  if (existingText.length === 0) return restoredText;
+  if (restoredText.length === 0) return existingText;
+  return `${existingText}\n\n${restoredText}`;
+}
+
+function mergeComposerEntries<T extends { readonly id: string }>(
+  existing: ReadonlyArray<T>,
+  restored: ReadonlyArray<T>,
+): T[] {
+  const entries = [...existing];
+  const existingIds = new Set(existing.map((entry) => entry.id));
+  for (const entry of restored) {
+    if (existingIds.has(entry.id)) continue;
+    existingIds.add(entry.id);
+    entries.push(entry);
+  }
+  return entries;
+}
+
 function useDraftHeroLayoutTransition(isDraftHeroState: boolean) {
   const transitionGroupRef = useRef<HTMLDivElement | null>(null);
   const composerAnchorRef = useRef<HTMLDivElement | null>(null);
@@ -795,7 +820,11 @@ function useLocalDispatchState(input: {
   );
   const activeLocalDispatch = serverAcknowledgedLocalDispatch ? null : localDispatch;
   const beginLocalDispatch = useCallback(
-    (options?: { preparingWorktree?: boolean; submissionIntent?: ComposerSubmissionIntent }) => {
+    (options?: {
+      preparingWorktree?: boolean;
+      submissionIntent?: ComposerSubmissionIntent;
+      messageId?: MessageId;
+    }) => {
       const preparingWorktree = Boolean(options?.preparingWorktree);
       setLocalDispatch((current) => {
         const active = serverAcknowledgedLocalDispatch ? null : current;
@@ -1454,7 +1483,7 @@ export default function ChatView(props: ChatViewProps) {
   const threadSyncPhase = routeKind === "server" ? (props.threadSyncPhase ?? null) : null;
   const threadDetailLoading = threadSyncPhase === "loading";
   const handleNewThread = useNewThreadHandler();
-  const { settleThread, pinThread, confirmAndUnpinThread } = useThreadActions();
+  const { settleThread, pinThread, confirmAndUnpinThread, forkThread } = useThreadActions();
   const routeThreadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
     [environmentId, threadId],
@@ -1467,6 +1496,32 @@ export default function ChatView(props: ChatViewProps) {
       currentRouteThreadKeyRef.current = null;
     };
   }, [routeThreadKey]);
+  const [isForkingThread, setIsForkingThread] = useState(false);
+  const forkInFlight = useRef(false);
+  const onForkThroughTurn = useCallback(
+    async (turnId: TurnId) => {
+      if (forkInFlight.current) return;
+      forkInFlight.current = true;
+      setIsForkingThread(true);
+      try {
+        const result = await forkThread(routeThreadRef, turnId);
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not fork thread",
+              description: error instanceof Error ? error.message : "Try again.",
+            }),
+          );
+        }
+      } finally {
+        forkInFlight.current = false;
+        setIsForkingThread(false);
+      }
+    },
+    [forkThread, routeThreadRef],
+  );
   const updateProjectScriptSettings = useAtomCommand(serverEnvironment.updateSettings, {
     reportFailure: false,
   });
@@ -1482,6 +1537,9 @@ export default function ChatView(props: ChatViewProps) {
     reportFailure: false,
   });
   const switchGitRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
+  const refreshLocalVcsStatus = useAtomCommand(vcsEnvironment.refreshLocalStatus, {
+    reportFailure: false,
+  });
   const setThreadRuntimeMode = useAtomCommand(threadEnvironment.setRuntimeMode, {
     reportFailure: false,
   });
@@ -1618,6 +1676,7 @@ export default function ChatView(props: ChatViewProps) {
   const setComposerDraftInteractionMode = useComposerDraftStore(
     (store) => store.setInteractionMode,
   );
+  const getComposerDraft = useComposerDraftStore((store) => store.getComposerDraft);
   const clearComposerDraftContent = useComposerDraftStore((store) => store.clearComposerContent);
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const getDraftSessionByLogicalProjectKey = useComposerDraftStore(
@@ -3597,10 +3656,11 @@ export default function ChatView(props: ChatViewProps) {
           input: { cwd: gitStatusCwd },
         }),
   );
-  useWorkspaceMutationRefresh({
-    enabled: gitStatusCwd !== null,
+  useWorkspaceMutationVcsStatusRefresh({
+    environmentId,
+    cwd: gitStatusCwd,
     mutationId: workspaceMutationId,
-    refresh: gitStatusQuery.refresh,
+    refreshStatus: refreshLocalVcsStatus,
     resourceKey: `git-status:${activeThreadKey ?? ""}:${gitStatusCwd ?? ""}`,
   });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -4499,6 +4559,12 @@ export default function ChatView(props: ChatViewProps) {
   );
   const addDiffSurface = useCallback(() => {
     if (!activeThreadRef || !isServerThread || !isGitRepo) return;
+    useRightPanelStore.getState().open(activeThreadRef, "diff");
+    onDiffPanelOpen?.();
+  }, [activeThreadRef, isGitRepo, isServerThread, onDiffPanelOpen]);
+  const openWorkingTreeDiff = useCallback(() => {
+    if (!activeThreadRef || !isServerThread || !isGitRepo) return;
+    useDiffPanelStore.getState().selectGitScope(activeThreadRef, "unstaged");
     useRightPanelStore.getState().open(activeThreadRef, "diff");
     onDiffPanelOpen?.();
   }, [activeThreadRef, isGitRepo, isServerThread, onDiffPanelOpen]);
@@ -5719,7 +5785,12 @@ export default function ChatView(props: ChatViewProps) {
     return () => {
       window.clearTimeout(timer);
     };
-  }, [activeThread?.id, activeThread?.messages, handoffAttachmentPreviews, optimisticUserMessages]);
+  }, [
+    activeThread?.id,
+    activeThread?.messages,
+    handoffAttachmentPreviews,
+    optimisticUserMessages,
+  ]);
 
   useEffect(() => {
     setOptimisticUserMessages((existing) => {
@@ -7347,6 +7418,41 @@ export default function ChatView(props: ChatViewProps) {
       composerReviewComments.length === 0
         ? parseCodexFeedbackCommand(trimmed)
         : null;
+    if (!queuedMessage && ctxSelectedProvider === "codex" && isStandaloneForkCommand(trimmed)) {
+      const hasExtraContext =
+        composerImages.length > 0 ||
+        composerTerminalContexts.length > 0 ||
+        composerPreviewAnnotations.length > 0 ||
+        composerReviewComments.length > 0;
+      if (hasExtraContext) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "warning",
+            title: "Remove attached context first",
+            description: "/fork must be submitted by itself.",
+          }),
+        );
+        return;
+      }
+      const result = await forkThread(routeThreadRef);
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not fork thread",
+              description: error instanceof Error ? error.message : "Try again.",
+            }),
+          );
+        }
+        return;
+      }
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+      return;
+    }
     if (feedbackCommand && !queuedMessage) {
       if (!isServerThread || activeThread.session === null) {
         toastManager.add(
@@ -7730,13 +7836,14 @@ export default function ChatView(props: ChatViewProps) {
       abortQueuedReplay();
       return;
     }
+    const messageIdForSend = newMessageId();
+    const messageCreatedAt = new Date().toISOString();
     beginLocalDispatch({
       preparingWorktree: Boolean(baseBranchForWorktree),
       submissionIntent: resolvedSubmissionIntent,
+      messageId: messageIdForSend,
     });
 
-    const messageIdForSend = newMessageId();
-    const messageCreatedAt = new Date().toISOString();
     const turnAttachmentsPromise = Promise.all(
       composerAttachmentsSnapshot.map(async (attachment) => {
         if (turnUsesAttachmentUploads) {
@@ -8538,7 +8645,7 @@ export default function ChatView(props: ChatViewProps) {
       });
 
       sendInFlightRef.current = true;
-      beginLocalDispatch({ preparingWorktree: false });
+      beginLocalDispatch({ preparingWorktree: false, messageId: messageIdForSend });
       setThreadError(threadIdForSend, null);
 
       scrollToEnd();
@@ -9479,6 +9586,12 @@ export default function ChatView(props: ChatViewProps) {
                 onRevertToTurnCount={
                   paintOnlyDisplayedTimeline ? noopHeldRevert : onRevertTimelineTurn
                 }
+                onForkThroughTurn={
+                  routeKind === "server" && readThreadCanFork(routeThreadRef, true)
+                    ? onForkThroughTurn
+                    : undefined
+                }
+                isForkingThread={isForkingThread}
                 isRevertingCheckpoint={!paintOnlyDisplayedTimeline && isRevertingCheckpoint}
                 onImageExpand={onExpandTimelineImage}
                 onFileOpen={paintOnlyDisplayedTimeline ? noopHeldAttachment : openFileAttachment}
@@ -9754,6 +9867,9 @@ export default function ChatView(props: ChatViewProps) {
                                     }
                                   : {})}
                                 envLocked={envLocked}
+                                {...(isServerThread
+                                  ? { onWorkingTreeOpen: openWorkingTreeDiff }
+                                  : {})}
                                 onComposerFocusRequest={scheduleComposerFocus}
                                 {...(canCheckoutPullRequestIntoThread
                                   ? { onCheckoutPullRequestRequest: openPullRequestDialog }

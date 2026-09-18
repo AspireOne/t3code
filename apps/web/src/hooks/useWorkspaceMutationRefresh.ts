@@ -1,5 +1,5 @@
-import type { OrchestrationThreadActivity } from "@t3tools/contracts";
-import { useEffect, useRef } from "react";
+import type { EnvironmentId, OrchestrationThreadActivity } from "@t3tools/contracts";
+import { useCallback, useEffect, useRef } from "react";
 
 const WORKSPACE_MUTATION_ITEM_TYPES = new Set(["command_execution", "file_change"]);
 
@@ -62,4 +62,28 @@ export function useWorkspaceMutationRefresh(input: {
     handledTokenRef.current = token;
     refresh();
   }, [enabled, mutationId, refresh, resourceKey]);
+}
+
+export function useWorkspaceMutationVcsStatusRefresh(input: {
+  readonly environmentId: EnvironmentId;
+  readonly cwd: string | null;
+  readonly mutationId: string | null;
+  readonly refreshStatus: (target: {
+    readonly environmentId: EnvironmentId;
+    readonly input: { readonly cwd: string };
+  }) => unknown;
+  readonly resourceKey: string;
+}): void {
+  const { cwd, environmentId, mutationId, refreshStatus, resourceKey } = input;
+  const refresh = useCallback(() => {
+    if (cwd === null) return;
+    void refreshStatus({ environmentId, input: { cwd } });
+  }, [cwd, environmentId, refreshStatus]);
+
+  useWorkspaceMutationRefresh({
+    enabled: cwd !== null,
+    mutationId,
+    refresh,
+    resourceKey,
+  });
 }

@@ -6,7 +6,7 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { runMigrations } from "../Migrations.ts";
 import addSessionStartedAt from "./044_ProjectionThreadSessionStartedAt.ts";
 import addQueuedMessages from "./045_ProjectionQueuedMessages.ts";
-import reconcileFork from "./050_ForkSchemaCompatibility.ts";
+import reconcileFork from "./053_ForkSchemaCompatibility.ts";
 
 for (const history of ["fresh", "upstream", "fork"] as const) {
   it.layer(NodeSqliteClient.layerMemory())(`v39 migration from ${history}`, (it) => {
@@ -43,6 +43,10 @@ for (const history of ["fresh", "upstream", "fork"] as const) {
             VALUES (44, 'ProjectionThreadSessionStartedAt'), (45, 'ProjectionQueuedMessages')
           `;
           yield* sql`
+            INSERT INTO effect_sql_migrations (migration_id, name)
+            VALUES (50, 'ForkSchemaCompatibility')
+          `;
+          yield* sql`
             INSERT INTO projection_queued_messages
               (message_id, thread_id, text, attachments_json, runtime_mode, interaction_mode, queued_at)
             VALUES ('queued-1', 'thread-1', 'Keep this follow-up', '[]', 'full-access', 'default', '2026-01-01T00:00:00.000Z')
@@ -60,6 +64,10 @@ for (const history of ["fresh", "upstream", "fork"] as const) {
         }>`PRAGMA table_info(projection_thread_sessions)`;
         assert.isTrue(projectColumns.some((column) => column.name === "auto_pull"));
         assert.isTrue(sessionColumns.some((column) => column.name === "started_at"));
+        const pullRequestColumns = yield* sql<{
+          readonly name: string;
+        }>`PRAGMA table_info(projection_thread_pull_requests)`;
+        assert.isTrue(pullRequestColumns.length > 0);
         const projects = yield* sql<{
           readonly projectId: string;
           readonly model: string | null;
