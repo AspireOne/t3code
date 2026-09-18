@@ -21,6 +21,7 @@ import {
   parseNodePath,
   parseNodeVersion,
   parseResolvedPath,
+  parseSshAuthSock,
   parseToolchainReport,
   parseWslRuntimeRoot,
   probeWslDistros,
@@ -869,6 +870,21 @@ describe("parseResolvedPath", () => {
   it("returns null when the resolved PATH is absent or empty", () => {
     expect(parseResolvedPath("nodePath:/usr/bin/node\n")).toBeNull();
     expect(parseResolvedPath("resolvedPath:\n")).toBeNull();
+  });
+});
+
+describe("parseSshAuthSock", () => {
+  it("reads the SSH agent socket emitted by the interactive WSL shell", () => {
+    expect(
+      parseSshAuthSock(
+        "shell startup noise\nsshAuthSock:/tmp/ssh-test/agent.42\nmore startup noise\n",
+      ),
+    ).toBe("/tmp/ssh-test/agent.42");
+  });
+
+  it("returns null when the shell has no SSH agent socket", () => {
+    expect(parseSshAuthSock("sshAuthSock:\n")).toBeNull();
+    expect(parseSshAuthSock("resolvedPath:/usr/bin\n")).toBeNull();
   });
 });
 

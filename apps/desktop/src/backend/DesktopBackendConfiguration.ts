@@ -246,6 +246,9 @@ interface WslPreflightSuccess {
   // PATH captured from the user's login shell. The launch forwards this value
   // directly without a shell so the server can spawn provider CLIs by name.
   readonly resolvedPath: string;
+  // SSH agent socket captured from the user's interactive WSL shell. GUI-launched
+  // WSL servers do not otherwise inherit it, while integrated terminals do.
+  readonly sshAuthSock: string | null;
   // Identifies the distro-local runtime cache selected from the packaged archive.
   readonly runtimeId?: string;
 }
@@ -400,6 +403,7 @@ const runWslPreflight = Effect.fn("desktop.backendConfiguration.wslPreflight")(f
           windowsEntryPath: environment.backendEntryPath,
           runtime: { kind: "executable", entryPath: `${runtime.linuxAppRoot}/t3` },
           resolvedPath: stagedProbe.resolvedPath,
+          sshAuthSock: stagedProbe.sshAuthSock,
           runtimeId: input.runtimeArchive.runtimeId,
         } as const;
       }
@@ -455,6 +459,7 @@ const runWslPreflight = Effect.fn("desktop.backendConfiguration.wslPreflight")(f
       linuxEntryPath: `${mounted.linuxAppRoot}/apps/server/dist/bin.mjs`,
     },
     resolvedPath: nodePtyResult.resolvedPath,
+    sshAuthSock: nodePtyResult.sshAuthSock,
   } as const;
 });
 
@@ -749,6 +754,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     runtime.kind === "executable"
       ? [runtime.entryPath]
       : [runtime.nodePath, runtime.linuxEntryPath];
+  const sshAgentArgs = preflight.sshAuthSock ? [`SSH_AUTH_SOCK=${preflight.sshAuthSock}`] : [];
 
   return {
     ...baseConfig,
@@ -757,6 +763,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
       "--exec",
       "env",
       `PATH=${launchPath}`,
+      ...sshAgentArgs,
       ...command,
       "--bootstrap-fd",
       "0",

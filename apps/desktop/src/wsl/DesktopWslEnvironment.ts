@@ -58,6 +58,7 @@ export type EnsureWslNodePtyResult =
       readonly ok: true;
       readonly nodePath: string;
       readonly resolvedPath: string;
+      readonly sshAuthSock: string | null;
     }
   | {
       readonly ok: false;
@@ -73,6 +74,7 @@ export type ProbeWslRuntimeResult =
   | {
       readonly ok: true;
       readonly resolvedPath: string;
+      readonly sshAuthSock: string | null;
     }
   | {
       readonly ok: false;
@@ -502,6 +504,9 @@ export const parseWslRuntimeRoot = (stdout: string): string | null => {
 // there. Distinct from a binary that is present but will not load, which is a
 // distro problem rather than a build problem.
 const NODE_PTY_BINARY_MISSING_EXIT_CODE = 4;
+const SSH_AUTH_SOCK_PROBE_COMMAND = shellQuote(
+  'printf "\\nsshAuthSock:%s\\n" "${SSH_AUTH_SOCK:-}"',
+);
 
 const formatNodePtyProbeFailureReason = (exitCode: number): string | null =>
   exitCode === NODE_PTY_BINARY_MISSING_EXIT_CODE
@@ -517,6 +522,11 @@ const NODE_PTY_PROBE_SCRIPT = (
 ) => `printf 'nodePath:%s\\n' "$(command -v node 2>/dev/null)"
 printf 'nodeVersion:%s\\n' "$(node -p 'process.versions.node' 2>/dev/null)"
 ${RESOLVED_PATH_LINE}
+if [ -n "\${SHELL:-}" ] && [ -x "$SHELL" ]; then
+  "$SHELL" -ilc ${SSH_AUTH_SOCK_PROBE_COMMAND} 2>/dev/null
+else
+  printf 'sshAuthSock:%s\\n' "\${SSH_AUTH_SOCK:-}"
+fi
 cd ${shellQuote(linuxServerDir)} && node <<'NODE' >/dev/null 2>&1
 // The WSL Node can't read inside app.asar, so confirm what the server needs is
 // unpacked on the real filesystem before reporting the backend healthy. Exit 3
@@ -551,6 +561,13 @@ NODE`;
 export const buildWslRuntimeProbeScript = (linuxAppRoot: string) =>
   [
     `bash -lc ${shellQuote(`${buildWslNodeEnvPreamble()}${RESOLVED_PATH_LINE}`)} 2>/dev/null || ${RESOLVED_PATH_LINE}`,
+    [
+      'if [ -n "${SHELL:-}" ] && [ -x "$SHELL" ]; then',
+      `  "$SHELL" -ilc ${SSH_AUTH_SOCK_PROBE_COMMAND} 2>/dev/null`,
+      "else",
+      '  printf \'sshAuthSock:%s\\n\' "${SSH_AUTH_SOCK:-}"',
+      "fi",
+    ].join("\n"),
     `${shellQuote(`${linuxAppRoot}/t3`)} --version >/dev/null 2>&1`,
   ].join("\n");
 
@@ -629,6 +646,14 @@ export const parseResolvedPath = (stdout: string): string | null => {
   return resolvedPath.length > 0 ? resolvedPath : null;
 };
 
+export const parseSshAuthSock = (stdout: string): string | null => {
+  const prefix = "sshAuthSock:";
+  const line = stdout.split("\n").find((candidate) => candidate.startsWith(prefix));
+  if (line === undefined) return null;
+  const sshAuthSock = line.slice(prefix.length).replace(/\r$/, "");
+  return sshAuthSock.length > 0 ? sshAuthSock : null;
+};
+
 export const formatMissingToolsReason = (
   report: ToolchainReport,
   requiredRange: string | null,
@@ -704,7 +729,8 @@ const probeWslRuntimeImpl = (
         reason: "WSL login-shell PATH could not be resolved during backend preflight.",
       } as const;
     }
-    return { ok: true, resolvedPath } as const;
+    const sshAuthSock = parseSshAuthSock(probe.stdout);
+    return { ok: true, resolvedPath, sshAuthSock } as const;
   });
 
 const ensureNodePtyImpl = (
@@ -725,6 +751,7 @@ const ensureNodePtyImpl = (
     );
     const nodePath = parseNodePath(probe.stdout);
     const resolvedPath = parseResolvedPath(probe.stdout);
+    const sshAuthSock = parseSshAuthSock(probe.stdout);
 
     const transportFailureReason = formatWslShellTransportFailureReason(probe.transportFailure);
     if (transportFailureReason !== null) {
@@ -800,7 +827,7 @@ const ensureNodePtyImpl = (
           fatal: true,
         } as const;
       }
-      return { ok: true, nodePath, resolvedPath } as const;
+      return { ok: true, nodePath, resolvedPath, sshAuthSock } as const;
     }
 
     if (options.allowBuild !== true) {
@@ -881,7 +908,9 @@ const ensureNodePtyImpl = (
         retryLimit: BUILD_TRANSPORT_RETRY_LIMIT,
       } as const;
     }
-    if (build.exitCode === 0) return { ok: true, nodePath, resolvedPath } as const;
+    if (build.exitCode === 0) {
+      return { ok: true, nodePath, resolvedPath, sshAuthSock } as const;
+    }
     const trimmedTail = `${build.stdout}${build.stderr}`.trim().slice(-500);
     return {
       ok: false,
@@ -1217,7 +1246,8 @@ export const layerTest = (stub: DesktopWslEnvironmentTestStub = {}) => {
         stub.invalidateRuntime?.(distro, runtimeId) ?? Effect.void,
       probeRuntime: (distro, linuxAppRoot) =>
         Effect.succeed(
-          stub.probeRuntime?.(distro, linuxAppRoot) ?? { ok: true, resolvedPath: "/usr/bin:/bin" },
+          stub.probeRuntime?.(distro, linuxAppRoot) ??
+            { ok: true, resolvedPath: "/usr/bin:/bin", sshAuthSock: null },
         ),
       ensureNodePty: (distro, linuxAppRoot, options) =>
         Effect.succeed(
