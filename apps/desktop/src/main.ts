@@ -57,6 +57,7 @@ import * as DesktopShellEnvironment from "./shell/DesktopShellEnvironment.ts";
 import * as DesktopSshEnvironment from "./ssh/DesktopSshEnvironment.ts";
 import * as DesktopSshPasswordPrompts from "./ssh/DesktopSshPasswordPrompts.ts";
 import * as DesktopState from "./app/DesktopState.ts";
+import * as DesktopTray from "./app/DesktopTray.ts";
 import * as DesktopTelemetryPublisher from "./telemetry/DesktopTelemetryPublisher.ts";
 import * as DesktopUpdates from "./updates/DesktopUpdates.ts";
 import * as BrowserImport from "./preview/BrowserImport/BrowserImport.ts";
@@ -152,9 +153,15 @@ const desktopPreviewLayer = PreviewManager.layer.pipe(
   Layer.provideMerge(desktopFoundationLayer),
 );
 
+const desktopTrayLayer = DesktopTray.layer.pipe(
+  Layer.provideMerge(desktopFoundationLayer),
+  Layer.provideMerge(electronLayer),
+);
+
 const desktopWindowLayer = DesktopWindow.layer.pipe(
   Layer.provideMerge(desktopServerExposureLayer),
   Layer.provideMerge(desktopPreviewLayer),
+  Layer.provideMerge(desktopTrayLayer),
 );
 
 const desktopSnapShotLayer = DesktopSnapShot.layer.pipe(

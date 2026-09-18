@@ -13,6 +13,7 @@ import { type DesktopSnapShotEvent, DEFAULT_CLIENT_SETTINGS } from "@t3tools/con
 import * as DesktopAssets from "../app/DesktopAssets.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { makeComponentLogger } from "../app/DesktopObservability.ts";
+import * as DesktopTray from "../app/DesktopTray.ts";
 import * as ElectronMenu from "../electron/ElectronMenu.ts";
 import { getDesktopUrl } from "../electron/ElectronProtocol.ts";
 import * as ElectronShell from "../electron/ElectronShell.ts";
@@ -78,6 +79,7 @@ type DesktopWindowRuntimeServices =
   | DesktopAssets.DesktopAssets
   | DesktopAppSettings.DesktopAppSettings
   | DesktopClientSettings.DesktopClientSettings
+  | DesktopTray.DesktopTray
   | ElectronApp.ElectronApp
   | ElectronMenu.ElectronMenu
   | ElectronShell.ElectronShell
@@ -313,6 +315,7 @@ function bindFirstRevealTrigger(
 export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const assets = yield* DesktopAssets.DesktopAssets;
+  const desktopTray = yield* DesktopTray.DesktopTray;
   const electronMenu = yield* ElectronMenu.ElectronMenu;
   const electronShell = yield* ElectronShell.ElectronShell;
   const electronTheme = yield* ElectronTheme.ElectronTheme;
@@ -670,9 +673,23 @@ export const make = Effect.gen(function* () {
     window.on("move", scheduleBoundsPersist);
     window.on("maximize", scheduleBoundsPersist);
     window.on("unmaximize", scheduleBoundsPersist);
-    window.on("close", () => {
+    window.on("close", (event) => {
+      const shouldHide = desktopTray.shouldHideMainWindowOnClose();
+      if (shouldHide) {
+        event.preventDefault();
+        window.hide();
+      } else {
+        desktopTray.resetMainWindowClose();
+      }
       runFork(flushBoundsPersist);
     });
+    if (environment.platform === "win32") {
+      // Windows session shutdown/logoff can skip the app "before-quit" event.
+      // Let the OS close the window instead of treating it as a tray hide.
+      window.on("query-session-end", () => {
+        desktopTray.allowMainWindowClose();
+      });
+    }
 
     if (environment.platform === "darwin") {
       window.on("enter-full-screen", () => {
@@ -832,6 +849,7 @@ export const make = Effect.gen(function* () {
     window.on("closed", () => {
       clearDevelopmentLoadRetry();
       clearBoundsPersist();
+      desktopTray.resetMainWindowClose();
       void runPromise(electronWindow.clearMain(Option.some(window)));
     });
 
@@ -943,6 +961,31 @@ export const make = Effect.gen(function* () {
     yield* dispatch;
   });
 
+  const activate = Effect.gen(function* () {
+    const existingWindow = yield* currentMainWindow;
+    if (Option.isSome(existingWindow)) {
+      yield* electronWindow.reveal(existingWindow.value);
+      return;
+    }
+    // No real main window yet. While the backend is still cold-booting,
+    // re-reveal the connecting splash so taskbar/dock activation brings it
+    // back instead of doing nothing. Once the backend is ready we fall
+    // through to (re)create the real main -- including retrying a previously
+    // failed open the pool swallowed -- rather than latching onto the splash.
+    const backendReady = yield* Ref.get(backendReadyRef);
+    if (!backendReady) {
+      const splash = yield* Ref.get(splashWindowRef);
+      if (Option.isSome(splash)) {
+        yield* electronWindow.reveal(splash.value);
+        return;
+      }
+    }
+    yield* createMainIfBackendReady;
+  }).pipe(Effect.withSpan("desktop.window.activate"));
+  desktopTray.setOpenHandler(() => {
+    void runPromise(activate);
+  });
+
   return DesktopWindow.of({
     createMain,
     ensureMain,
@@ -953,27 +996,7 @@ export const make = Effect.gen(function* () {
         yield* electronWindow.prepareReveal(existingWindow.value);
       }
     }),
-    activate: Effect.gen(function* () {
-      const existingWindow = yield* currentMainWindow;
-      if (Option.isSome(existingWindow)) {
-        yield* electronWindow.reveal(existingWindow.value);
-        return;
-      }
-      // No real main window yet. While the backend is still cold-booting,
-      // re-reveal the connecting splash so taskbar/dock activation brings it
-      // back instead of doing nothing. Once the backend is ready we fall
-      // through to (re)create the real main -- including retrying a previously
-      // failed open the pool swallowed -- rather than latching onto the splash.
-      const backendReady = yield* Ref.get(backendReadyRef);
-      if (!backendReady) {
-        const splash = yield* Ref.get(splashWindowRef);
-        if (Option.isSome(splash)) {
-          yield* electronWindow.reveal(splash.value);
-          return;
-        }
-      }
-      yield* createMainIfBackendReady;
-    }).pipe(Effect.withSpan("desktop.window.activate")),
+    activate,
     createMainIfBackendReady,
     showConnectingSplash,
     handleBackendReady: Effect.fn("desktop.window.handleBackendReady")(function* (httpBaseUrl) {

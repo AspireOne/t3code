@@ -128,3 +128,7 @@ For provider-specific setup and accounts, see [Codex](./providers-codex.md),
 - [Remote access](./remote-access.md): connect from another device.
 - [Running in the background](./background-service.md): keep a Linux or macOS host available.
 - [Updating T3 Code](./updating.md): update the app and connected servers.
+
+On Windows, closing the fork’s window keeps T3 running in the system tray.
+Choose **Quit** from the tray menu to stop it. **Restart app** is available in
+the desktop command palette.
