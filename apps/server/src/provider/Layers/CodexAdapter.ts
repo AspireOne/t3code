@@ -1660,6 +1660,10 @@ function mapToRuntimeEvents(
   }
 
   if (event.method === "item/started") {
+    const payload = readPayload(EffectCodexSchema.V2ItemStartedNotification, event.payload);
+    if (payload && toCanonicalItemType(payload.item.type) === "context_compaction") {
+      return [];
+    }
     const started = mapItemLifecycle(event, canonicalThreadId, "item.started");
     return started ? [started] : [];
   }
@@ -1692,6 +1696,18 @@ function mapToRuntimeEvents(
       ];
     }
     const itemType = toCanonicalItemType(item.type);
+    if (itemType === "context_compaction") {
+      return [
+        {
+          ...runtimeEventBase(event, canonicalThreadId),
+          type: "thread.state.changed",
+          payload: {
+            state: "compacted",
+            detail: event.payload,
+          },
+        },
+      ];
+    }
     if (itemType === "plan") {
       const detail = itemDetail(itemType, item);
       if (!detail) {
@@ -1708,18 +1724,7 @@ function mapToRuntimeEvents(
       ];
     }
     const completed = mapItemLifecycle(event, canonicalThreadId, "item.completed");
-    if (!completed || itemType !== "context_compaction") {
-      return completed ? [completed] : [];
-    }
-    return [
-      completed,
-      {
-        ...runtimeEventBase(event, canonicalThreadId),
-        eventId: EventId.make(`${event.id}:thread-compacted`),
-        type: "thread.state.changed",
-        payload: { state: "compacted" },
-      },
-    ];
+    return completed ? [completed] : [];
   }
 
   if (
@@ -2476,6 +2481,133 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       }),
     );
 
+  const makeOneShotRuntime = Effect.fn("CodexAdapter.makeOneShotRuntime")(function* (
+    input: CodexSessionRuntimeOptions,
+  ) {
+    const runtime = yield* (options?.makeRuntime ?? makeCodexSessionRuntime)(input).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
+      Effect.provideService(Crypto.Crypto, crypto),
+      Effect.mapError(
+        (cause) =>
+          new ProviderAdapterProcessError({
+            provider: PROVIDER,
+            threadId: input.threadId,
+            detail: cause.message,
+            cause,
+          }),
+      ),
+    );
+    yield* Effect.addFinalizer(() => runtime.close.pipe(Effect.ignore));
+    return runtime;
+  });
+
+  const forkThread: NonNullable<CodexAdapterShape["forkThread"]> = (input) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        if (!isCodexResumeCursorSchema(input.sourceResumeCursor)) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "forkThread",
+            issue: "The source thread has no Codex resume cursor.",
+          });
+        }
+        const serviceTier =
+          input.modelSelection.instanceId === boundInstanceId
+            ? getCodexServiceTierOptionValue(input.modelSelection)
+            : undefined;
+        const runtime = yield* makeOneShotRuntime({
+          threadId: input.targetThreadId,
+          providerInstanceId: boundInstanceId,
+          cwd: input.cwd,
+          binaryPath: codexConfig.binaryPath,
+          launchArgs: resolveCodexLaunchArgs(codexConfig.launchArgs, options?.environment),
+          ...(options?.environment ? { environment: options.environment } : {}),
+          ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
+          runtimeMode: input.runtimeMode,
+          ...(input.modelSelection.instanceId === boundInstanceId
+            ? { model: input.modelSelection.model }
+            : {}),
+          ...(serviceTier ? { serviceTier } : {}),
+          fork: {
+            sourceThreadId: input.sourceResumeCursor.threadId,
+            lastTurnId: input.lastTurnId,
+          },
+        });
+        const session = yield* runtime.start().pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderAdapterProcessError({
+                provider: PROVIDER,
+                threadId: input.targetThreadId,
+                detail: cause.message,
+                cause,
+              }),
+          ),
+        );
+        if (!isCodexResumeCursorSchema(session.resumeCursor)) {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "thread/fork",
+            detail: "Codex did not return a resume cursor for the forked thread.",
+          });
+        }
+        return { resumeCursor: session.resumeCursor };
+      }),
+    );
+
+  const deleteThread: NonNullable<CodexAdapterShape["deleteThread"]> = (input) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        if (!isCodexResumeCursorSchema(input.resumeCursor)) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "deleteThread",
+            issue: "A Codex thread resume cursor is required.",
+          });
+        }
+        const runtime = yield* makeOneShotRuntime({
+          threadId: input.threadId,
+          providerInstanceId: boundInstanceId,
+          cwd: process.cwd(),
+          binaryPath: codexConfig.binaryPath,
+          launchArgs: resolveCodexLaunchArgs(codexConfig.launchArgs, options?.environment),
+          ...(options?.environment ? { environment: options.environment } : {}),
+          ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
+          runtimeMode: "full-access",
+          resumeCursor: input.resumeCursor,
+        });
+        yield* runtime.start().pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderAdapterProcessError({
+                provider: PROVIDER,
+                threadId: input.threadId,
+                detail: cause.message,
+                cause,
+              }),
+          ),
+        );
+        if (runtime.deleteThread === undefined) {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "thread/delete",
+            detail: "The Codex runtime does not support deleting native threads.",
+          });
+        }
+        yield* runtime.deleteThread.pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "thread/delete",
+                detail: cause.message,
+                cause,
+              }),
+          ),
+        );
+      }),
+    );
+
   const resolveAttachment = Effect.fn("resolveAttachment")(function* (
     input: ProviderSendTurnInput,
     attachment: NonNullable<ProviderSendTurnInput["attachments"]>[number],
@@ -2714,9 +2846,12 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     provider: PROVIDER,
     capabilities: {
       sessionModelSwitch: "in-session",
+      threadFork: "native",
       promptlessTurnContinuation: true,
     },
     startSession,
+    forkThread,
+    deleteThread,
     sendTurn,
     compaction: { type: "native", start: compactThread },
     interruptTurn,

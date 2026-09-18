@@ -14,6 +14,7 @@ import {
   MessageId,
   ModelSelection,
   NonNegativeInt,
+  ThreadId,
   ProviderInterruptTurnInput,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
@@ -26,7 +27,6 @@ import {
   ProviderSessionStartInput,
   ProviderStopSessionInput,
   ProviderUploadFeedbackInput,
-  ThreadId,
   TurnId,
   type ProjectId,
   type ProviderInstanceId,
@@ -1566,6 +1566,91 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
+  const forkConversation: NonNullable<ProviderServiceMethod<"forkConversation">> = Effect.fn(
+    "forkConversation",
+  )(function* (input) {
+    const sourceBinding = yield* directory.getBinding(input.sourceThreadId);
+    if (Option.isNone(sourceBinding)) {
+      return yield* toValidationError(
+        "ProviderService.forkConversation",
+        `Source thread '${input.sourceThreadId}' has no provider binding.`,
+      );
+    }
+    const providerInstanceId = yield* requireBindingInstanceId(
+      "ProviderService.forkConversation",
+      sourceBinding.value,
+    );
+    const instanceInfo = yield* registry.getInstanceInfo(providerInstanceId);
+    if (!instanceInfo.enabled) {
+      return yield* toValidationError(
+        "ProviderService.forkConversation",
+        `Provider instance '${providerInstanceId}' is disabled in T3 Code settings.`,
+      );
+    }
+    const adapter = yield* registry.getByInstance(providerInstanceId);
+    if (adapter.capabilities.threadFork !== "native" || adapter.forkThread === undefined) {
+      return yield* toValidationError(
+        "ProviderService.forkConversation",
+        `Provider '${adapter.provider}' does not support native thread forking.`,
+      );
+    }
+    const forked = yield* adapter.forkThread({
+      ...input,
+      sourceResumeCursor: sourceBinding.value.resumeCursor,
+    });
+    const lastRuntimeEventAt = yield* nowIso;
+    yield* Effect.uninterruptibleMask((restore) =>
+      restore(
+        directory.upsert({
+          threadId: input.targetThreadId,
+          provider: adapter.provider,
+          providerInstanceId,
+          runtimeMode: input.runtimeMode,
+          status: "stopped",
+          resumeCursor: forked.resumeCursor,
+          runtimePayload: {
+            modelSelection: input.modelSelection,
+            activeTurnId: null,
+            lastRuntimeEvent: "provider.forkConversation",
+            lastRuntimeEventAt,
+            cwd: input.cwd,
+          },
+        }),
+      ).pipe(
+        Effect.catchCause((cause) => {
+          const deleteNative = adapter.deleteThread?.({
+            threadId: input.targetThreadId,
+            resumeCursor: forked.resumeCursor,
+          });
+          return Effect.all(
+            [
+              deleteNative?.pipe(Effect.ignore) ?? Effect.void,
+              (directory.remove?.(input.targetThreadId) ?? Effect.void).pipe(Effect.ignore),
+            ],
+            { discard: true },
+          ).pipe(Effect.andThen(Effect.failCause(cause)));
+        }),
+      ),
+    );
+    return { resumeCursor: forked.resumeCursor, providerInstanceId };
+  });
+
+  const discardFork: NonNullable<ProviderServiceMethod<"discardFork">> = Effect.fn("discardFork")(
+    function* (input) {
+      const adapter = yield* registry.getByInstance(input.providerInstanceId);
+      const deleteNative =
+        adapter.deleteThread === undefined
+          ? Effect.void
+          : adapter.deleteThread({
+              threadId: input.threadId,
+              resumeCursor: input.resumeCursor,
+            });
+      yield* deleteNative.pipe(
+        Effect.ensuring((directory.remove?.(input.threadId) ?? Effect.void).pipe(Effect.ignore)),
+      );
+    },
+  );
+
   const sendTurn: ProviderServiceMethod<"sendTurn"> = Effect.fn("sendTurn")(function* (rawInput) {
     const parsed = yield* decodeInputOrValidationError({
       operation: "ProviderService.sendTurn",
@@ -2181,6 +2266,31 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
+  const ensureSession: ProviderServiceMethod<"ensureSession"> = Effect.fn("ensureSession")(
+    function* (threadId) {
+      const bindingOption = yield* directory.getBinding(threadId);
+      const binding = Option.getOrUndefined(bindingOption);
+      if (!binding) {
+        return yield* toValidationError(
+          "ProviderService.ensureSession",
+          `Cannot recover thread '${threadId}' because no persisted provider binding exists.`,
+        );
+      }
+      const providerInstanceId = yield* requireBindingInstanceId(
+        "ProviderService.ensureSession",
+        binding,
+      );
+      const recovered = yield* recoverSessionForThread({
+        binding,
+        operation: "ProviderService.ensureSession",
+      });
+      return {
+        ...recovered.session,
+        providerInstanceId,
+      };
+    },
+  );
+
   const getCapabilities: ProviderServiceMethod<"getCapabilities"> = (instanceId) =>
     registry.getByInstance(instanceId).pipe(Effect.map((adapter) => adapter.capabilities));
 
@@ -2400,6 +2510,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   return {
     startSession,
+    forkConversation,
+    discardFork,
     sendTurn,
     compactThread,
     interruptTurn,
@@ -2407,6 +2519,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     respondToUserInput,
     stopSession,
     listSessions,
+    ensureSession,
     getCapabilities,
     getInstanceInfo,
     assertConversationRollbackSupported,

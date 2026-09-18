@@ -26,6 +26,9 @@ import type {
   MessageId,
   ThreadId,
   ProviderTurnStartResult,
+  ModelSelection,
+  RuntimeMode,
+  TurnId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
@@ -46,6 +49,24 @@ export interface ProviderServiceShape {
     threadId: ThreadId,
     input: ProviderSessionStartInput,
   ) => Effect.Effect<ProviderSession, ProviderServiceError>;
+
+  readonly forkConversation?: (input: {
+    readonly sourceThreadId: ThreadId;
+    readonly targetThreadId: ThreadId;
+    readonly lastTurnId: TurnId;
+    readonly cwd: string;
+    readonly runtimeMode: RuntimeMode;
+    readonly modelSelection: ModelSelection;
+  }) => Effect.Effect<
+    { readonly resumeCursor: unknown; readonly providerInstanceId: ProviderInstanceId },
+    ProviderServiceError
+  >;
+
+  readonly discardFork?: (input: {
+    readonly threadId: ThreadId;
+    readonly providerInstanceId: ProviderInstanceId;
+    readonly resumeCursor: unknown;
+  }) => Effect.Effect<void, ProviderServiceError>;
 
   /**
    * Send a provider turn.
@@ -94,6 +115,18 @@ export interface ProviderServiceShape {
    * Aggregates runtime session lists from all registered adapters.
    */
   readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
+
+  /** Read quota from the exact live provider session without recovering it. */
+
+  /**
+   * Ensure a provider session is active for a durably bound thread.
+   *
+   * Adopts an existing adapter session or resumes it from persisted provider
+   * state, then returns the active session metadata.
+   */
+  readonly ensureSession: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ProviderSession, ProviderServiceError>;
 
   /**
    * Read capabilities for the adapter bound to a configured provider instance.

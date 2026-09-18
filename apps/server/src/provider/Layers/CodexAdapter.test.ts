@@ -70,6 +70,7 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
       runtimeMode: this.options.runtimeMode,
       threadId: this.options.threadId,
       cwd: this.options.cwd,
+      resumeCursor: { threadId: `provider-${String(this.options.threadId)}` },
       ...(this.options.model ? { model: this.options.model } : {}),
       createdAt: this.now,
       updatedAt: this.now,
@@ -89,6 +90,7 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
   public readonly interruptTurnImpl = vi.fn((_turnId?: TurnId): Promise<void> =>
     Promise.resolve(undefined),
   );
+  public readonly deleteThreadImpl = vi.fn(() => Promise.resolve(undefined));
 
   public readonly readThreadImpl = vi.fn((): Promise<CodexThreadSnapshot> =>
     Promise.resolve({
@@ -140,6 +142,8 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
     return Effect.promise(() => this.interruptTurnImpl(turnId));
   }
 
+  deleteThread = Effect.promise(() => this.deleteThreadImpl());
+
   readThread = Effect.promise(() => this.readThreadImpl());
 
   rollbackThread(numTurns: number) {
@@ -181,6 +185,9 @@ function makeRuntimeFactory() {
     factory,
     get lastRuntime(): FakeCodexRuntime | undefined {
       return runtimes.at(-1);
+    },
+    runtimeFor(threadId: ThreadId): FakeCodexRuntime | undefined {
+      return runtimes.find((runtime) => runtime.options.threadId === threadId);
     },
   };
 }
@@ -296,6 +303,73 @@ validationLayer("CodexAdapterLive validation", (it) => {
         threadId: asThreadId("thread-1"),
         runtimeMode: "full-access",
       });
+    }),
+  );
+  it.effect("forks through a one-shot runtime and closes it without registering a session", () =>
+    Effect.gen(function* () {
+      validationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const targetThreadId = asThreadId("thread-fork-target");
+
+      NodeAssert.ok(adapter.forkThread);
+      const forked = yield* adapter.forkThread({
+        sourceThreadId: asThreadId("thread-fork-source"),
+        targetThreadId,
+        sourceResumeCursor: { threadId: "native-source" },
+        lastTurnId: asTurnId("native-turn-3"),
+        cwd: "/tmp/fork-project",
+        runtimeMode: "approval-required",
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.3-codex", [
+          { id: "serviceTier", value: "priority" },
+        ]),
+      });
+
+      const runtime = validationRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      NodeAssert.deepStrictEqual(runtime.options, {
+        binaryPath: "codex",
+        cwd: "/tmp/fork-project",
+        fork: {
+          sourceThreadId: "native-source",
+          lastTurnId: asTurnId("native-turn-3"),
+        },
+        launchArgs: "",
+        model: "gpt-5.3-codex",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        runtimeMode: "approval-required",
+        serviceTier: "priority",
+        threadId: targetThreadId,
+      });
+      NodeAssert.deepStrictEqual(forked, {
+        resumeCursor: { threadId: "provider-thread-fork-target" },
+      });
+      NodeAssert.equal(runtime.startImpl.mock.calls.length, 1);
+      NodeAssert.equal(runtime.closeImpl.mock.calls.length, 1);
+      NodeAssert.equal(yield* adapter.hasSession(targetThreadId), false);
+    }),
+  );
+
+  it.effect("rejects a fork without a Codex resume cursor before starting a runtime", () =>
+    Effect.gen(function* () {
+      validationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      NodeAssert.ok(adapter.forkThread);
+
+      const result = yield* adapter
+        .forkThread({
+          sourceThreadId: asThreadId("thread-fork-source-invalid"),
+          targetThreadId: asThreadId("thread-fork-target-invalid"),
+          sourceResumeCursor: { opaque: "not-codex" },
+          lastTurnId: asTurnId("turn-1"),
+          cwd: "/tmp/fork-project",
+          runtimeMode: "full-access",
+          modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.3-codex"),
+        })
+        .pipe(Effect.result);
+
+      NodeAssert.equal(result._tag, "Failure");
+      NodeAssert.equal(result.failure._tag, "ProviderAdapterValidationError");
+      NodeAssert.equal(validationRuntimeFactory.factory.mock.calls.length, 0);
     }),
   );
 });

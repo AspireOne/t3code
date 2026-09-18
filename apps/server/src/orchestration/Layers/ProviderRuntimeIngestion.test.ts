@@ -1,3 +1,4 @@
+import * as CheckpointStore from "../../checkpointing/CheckpointStore.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -47,7 +48,6 @@ import {
   type ProviderServiceShape,
 } from "../../provider/Services/ProviderService.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
-import * as CheckpointStore from "../../checkpointing/CheckpointStore.ts";
 import * as VcsDriverRegistry from "../../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../../vcs/VcsProcess.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
@@ -128,6 +128,7 @@ function createProviderServiceHarness() {
     respondToUserInput: () => unsupported(),
     stopSession: () => unsupported(),
     listSessions: () => Effect.succeed([...runtimeSessions]),
+    ensureSession: () => unsupported(),
     getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
     assertConversationRollbackSupported: () => unsupported(),
     getInstanceInfo: (instanceId) => {
@@ -326,6 +327,11 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(ThreadPlanProgress.layer),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
+      Layer.provideMerge(
+        Layer.mock(CheckpointStore.CheckpointStore)({
+          isGitRepository: () => Effect.succeed(true),
+        }),
+      ),
       Layer.provideMerge(makeTestServerSettingsLayer(options?.serverSettings)),
       Layer.provideMerge(CheckpointStore.layer.pipe(Layer.provide(VcsDriverRegistry.layer))),
       Layer.provideMerge(VcsProcess.layer),
@@ -421,6 +427,54 @@ describe("ProviderRuntimeIngestion", () => {
       drain,
     };
   }
+
+  it.each(["completed", "failed"] as const)(
+    "drains one queued follow-up only after a successful turn (%s)",
+    async (state) => {
+      const harness = await createHarness();
+      const threadId = asThreadId("thread-1");
+      const turnId = asTurnId("queue-running-turn");
+      const base = {
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        turnId,
+        createdAt: "2026-01-01T00:00:01.000Z",
+      };
+      await harness.emitAndDrain([
+        { ...base, type: "turn.started", eventId: asEventId("queue-turn-started") },
+      ]);
+      for (const id of ["first", "second"]) {
+        await harness.dispatch({
+          type: "thread.turn.queue",
+          commandId: CommandId.make(`queue-${id}`),
+          threadId,
+          message: { messageId: MessageId.make(id), role: "user", text: id, attachments: [] },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: "2026-01-01T00:00:02.000Z",
+        });
+      }
+      await harness.emitAndDrain([
+        {
+          ...base,
+          type: "turn.completed",
+          eventId: asEventId("queue-turn-completed"),
+          createdAt: "2026-01-01T00:00:03.000Z",
+          payload: { state },
+        },
+      ]);
+      const thread = (await harness.readModel()).threads.find((thread) => thread.id === threadId)!;
+      expect(thread.queuedMessages.map((message) => message.messageId)).toEqual(
+        state === "completed" ? ["second"] : ["first", "second"],
+      );
+      expect(
+        thread.messages.filter((message) => message.role === "user").map((message) => message.text),
+      ).toEqual(state === "completed" ? ["first"] : []);
+      expect(thread.pendingTurnStart?.messageId ?? null).toBe(
+        state === "completed" ? "first" : null,
+      );
+    },
+  );
 
   it("maps turn started/completed events into thread session updates", async () => {
     const harness = await createHarness();

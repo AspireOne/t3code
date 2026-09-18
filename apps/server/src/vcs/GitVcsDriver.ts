@@ -777,7 +777,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
 
       yield* Effect.gen(function* () {
         const baseline = input.turnBaselineCheckpointRef;
-        if (baseline !== null) {
+        if (baseline != null) {
           yield* execute({
             operation,
             cwd: input.cwd,
