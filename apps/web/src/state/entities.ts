@@ -8,6 +8,7 @@ import {
   type EnvironmentThreadStatus,
   mergeEnvironmentThread,
 } from "@t3tools/client-runtime/state/threads";
+import { canForkThread } from "@t3tools/client-runtime/thread-fork";
 import type { ScopedProjectRef, ScopedThreadRef, ServerConfig } from "@t3tools/contracts";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
@@ -217,6 +218,39 @@ export function readEnvironmentSupportsTitleRegeneration(environmentId: Environm
   return (
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
       .threadTitleRegeneration === true
+  );
+}
+
+/** Whether the environment can materialize a native provider thread fork. */
+export function readEnvironmentSupportsThreadForking(environmentId: EnvironmentId): boolean {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadForking === true
+  );
+}
+
+/** Resolve an instance through the thread's own environment under multi-server routing. */
+export function readEnvironmentProviderDriver(
+  environmentId: EnvironmentId,
+  instanceId: string,
+): string | null {
+  return (
+    appAtomRegistry
+      .get(environmentServerConfigsAtom)
+      .get(environmentId)
+      ?.providers.find((provider) => provider.instanceId === instanceId)?.driver ?? null
+  );
+}
+
+export function readThreadCanFork(ref: ScopedThreadRef, fromTurn = false): boolean {
+  const thread = readThreadShell(ref);
+  return (
+    thread !== null &&
+    canForkThread(
+      thread,
+      appAtomRegistry.get(environmentServerConfigsAtom).get(ref.environmentId),
+      { fromTurn, now: new Date().toISOString() },
+    )
   );
 }
 

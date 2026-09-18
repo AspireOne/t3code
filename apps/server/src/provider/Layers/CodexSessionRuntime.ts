@@ -178,6 +178,10 @@ export interface CodexSessionRuntimeOptions {
   readonly model?: string;
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly resumeCursor?: CodexResumeCursor;
+  readonly fork?: {
+    readonly sourceThreadId: string;
+    readonly lastTurnId: TurnId;
+  };
   readonly appServerArgs?: ReadonlyArray<string>;
   /** Capabilities the session's `t3-code` MCP credential grants; drives the prompt blocks. */
   readonly mcpCapabilities?: ReadonlySet<string>;
@@ -217,6 +221,7 @@ export interface CodexSessionRuntimeShape {
   readonly rollbackThread: (
     numTurns: number,
   ) => Effect.Effect<CodexThreadSnapshot, CodexSessionRuntimeError>;
+  readonly deleteThread?: Effect.Effect<void, CodexSessionRuntimeError>;
   readonly uploadFeedback: (
     reason?: string,
   ) => Effect.Effect<EffectCodexSchema.V2FeedbackUploadResponse, CodexSessionRuntimeError>;
@@ -691,6 +696,22 @@ export function isRecoverableThreadResumeError(error: unknown): boolean {
   return RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS.some((snippet) => message.includes(snippet));
 }
 
+interface CodexThreadHistoryClient {
+  readonly request: (
+    method: "thread/rollback",
+    payload: CodexRpc.ClientRequestParamsByMethod["thread/rollback"],
+  ) => Effect.Effect<
+    CodexRpc.ClientRequestResponsesByMethod["thread/rollback"],
+    CodexErrors.CodexAppServerError
+  >;
+  readonly raw: {
+    readonly request: (
+      method: string,
+      payload: unknown,
+    ) => Effect.Effect<unknown, CodexErrors.CodexAppServerError>;
+  };
+}
+
 const CodexThreadResumeMetadata = Schema.Struct({
   cwd: Schema.String,
   model: Schema.String,
@@ -724,6 +745,7 @@ export const openCodexThread = (input: {
   readonly requestedModel: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
   readonly resumeThreadId: string | undefined;
+  readonly fork?: { readonly sourceThreadId: string; readonly lastTurnId: TurnId } | undefined;
 }): Effect.Effect<typeof CodexThreadResumeMetadata.Type, CodexErrors.CodexAppServerError> => {
   const resumeThreadId = input.resumeThreadId;
   const startParams = buildThreadStartParams({
@@ -732,6 +754,48 @@ export const openCodexThread = (input: {
     model: input.requestedModel,
     serviceTier: input.serviceTier,
   });
+
+  if (input.fork !== undefined) {
+    const fork = input.fork;
+    const requestFork = input.client.request as unknown as <
+      M extends "thread/fork" | "thread/delete",
+    >(
+      method: M,
+      payload: CodexRpc.ClientRequestParamsByMethod[M],
+    ) => Effect.Effect<CodexRpc.ClientRequestResponsesByMethod[M], CodexErrors.CodexAppServerError>;
+    return Effect.gen(function* () {
+      const response = yield* requestFork("thread/fork", {
+        ...startParams,
+        threadId: fork.sourceThreadId,
+        lastTurnId: fork.lastTurnId,
+        ephemeral: false,
+      });
+      // Older app servers may silently ignore an unknown lastTurnId field.
+      // Never bind a full-history fork to a truncated T3 conversation.
+      if (
+        response.thread.id === fork.sourceThreadId ||
+        response.thread.turns.at(-1)?.id !== fork.lastTurnId
+      ) {
+        if (response.thread.id !== fork.sourceThreadId) {
+          yield* requestFork("thread/delete", { threadId: response.thread.id }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("failed to discard a Codex fork with an incorrect turn boundary", {
+                threadId: response.thread.id,
+                cause,
+              }),
+            ),
+          );
+        }
+        return yield* new CodexErrors.CodexAppServerRequestError({
+          code: -32603,
+          method: "thread/fork",
+          errorMessage:
+            "Codex did not return an independent fork ending at the selected turn. Update Codex and try again.",
+        });
+      }
+      return response;
+    });
+  }
 
   if (resumeThreadId === undefined) {
     return input.client.request("thread/start", startParams);
@@ -871,6 +935,11 @@ function readRouteFields(notification: CodexServerNotification): {
     case "thread/started":
       return {
         turnId: undefined,
+        itemId: undefined,
+      };
+    case "thread/compacted":
+      return {
+        turnId: TurnId.make(notification.params.turnId),
         itemId: undefined,
       };
     case "turn/started":
@@ -1348,8 +1417,8 @@ export const makeCodexSessionRuntime = (
     const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
       Effect.provide(clientContext),
     );
-    const serverNotifications = yield* Queue.unbounded<CodexServerNotification>();
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+    const serverNotifications = yield* Queue.unbounded<CodexServerNotification>();
     const randomUUIDv4 = (purpose: CodexErrors.CodexAppServerIdentifierPurpose) =>
       crypto.randomUUIDv4.pipe(
         Effect.mapError(
@@ -2377,6 +2446,7 @@ export const makeCodexSessionRuntime = (
         requestedModel,
         serviceTier: options.serviceTier,
         resumeThreadId: readResumeCursorThreadId(options.resumeCursor),
+        fork: options.fork,
       });
 
       const providerThreadId = opened.thread.id;
@@ -2538,6 +2608,10 @@ export const makeCodexSessionRuntime = (
           });
           return snapshot;
         }),
+      deleteThread: readProviderThreadId.pipe(
+        Effect.flatMap((threadId) => client.request("thread/delete", { threadId })),
+        Effect.asVoid,
+      ),
       uploadFeedback: (reason) =>
         Effect.gen(function* () {
           const providerThreadId = yield* readProviderThreadId;

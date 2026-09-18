@@ -23,7 +23,10 @@ import {
   readEnvironmentSupportsPinning,
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
+  readEnvironmentSupportsThreadForking,
   readEnvironmentSupportsTitleRegeneration,
+  readEnvironmentProviderDriver,
+  readThreadCanFork,
   readThreadShell,
   useProjects,
 } from "../state/entities";
@@ -87,6 +90,7 @@ export function useThreadActionMenu(input: {
     snoozeThread,
     unsnoozeThread,
     pinThread,
+    forkThread,
     confirmAndUnpinThread,
     archiveThread,
     deleteThread,
@@ -135,6 +139,12 @@ export function useThreadActionMenu(input: {
           snooze: readEnvironmentSupportsSnooze(threadRef.environmentId),
           pinning: readEnvironmentSupportsPinning(threadRef.environmentId),
           titleRegeneration: readEnvironmentSupportsTitleRegeneration(threadRef.environmentId),
+          forking:
+            readEnvironmentSupportsThreadForking(threadRef.environmentId) &&
+            readEnvironmentProviderDriver(
+              threadRef.environmentId,
+              thread.session?.providerInstanceId ?? thread.modelSelection.instanceId,
+            ) === "codex",
         };
         const isRegeneratingTitle = thread.titleRegeneration != null;
         const snoozePresets = resolveSnoozePresets(now, timestampFormat);
@@ -144,6 +154,7 @@ export function useThreadActionMenu(input: {
           isSettled: supports.settlement && thread.settledOverride === "settled",
           isSnoozed: supports.snooze && effectiveSnoozed(thread, { now: now.toISOString() }),
           canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
+          canFork: readThreadCanFork(threadRef),
           isRegeneratingTitle,
           isRunning: thread.session?.status === "running" && thread.session.activeTurnId != null,
           supports,
@@ -194,6 +205,9 @@ export function useThreadActionMenu(input: {
           }
         };
         switch (action) {
+          case "fork":
+            await reportFailure("Failed to fork thread", () => forkThread(threadRef));
+            return;
           case "project-settings": {
             const project = projects.find(
               (candidate) =>
@@ -341,6 +355,7 @@ export function useThreadActionMenu(input: {
       copyPathToClipboard,
       copyThreadIdToClipboard,
       deleteThread,
+      forkThread,
       handleNewThread,
       logicalProjectKeyByPhysicalKey,
       markThreadUnread,

@@ -223,6 +223,8 @@ export const make = Effect.gen(function* () {
       pullRequests: true,
       inlineMessageContext: true,
       threadSettlement: true,
+      threadForking: true,
+      threadForkingFromTurn: true,
       threadAutoSettlement: true,
       threadRestartContinuation: true,
       projectSettingsOverrides: true,

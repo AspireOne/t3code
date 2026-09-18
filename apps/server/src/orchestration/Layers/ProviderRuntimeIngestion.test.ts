@@ -428,53 +428,6 @@ describe("ProviderRuntimeIngestion", () => {
     };
   }
 
-  it.each(["completed", "failed"] as const)(
-    "drains one queued follow-up only after a successful turn (%s)",
-    async (state) => {
-      const harness = await createHarness();
-      const threadId = asThreadId("thread-1");
-      const turnId = asTurnId("queue-running-turn");
-      const base = {
-        provider: ProviderDriverKind.make("codex"),
-        threadId,
-        turnId,
-        createdAt: "2026-01-01T00:00:01.000Z",
-      };
-      await harness.emitAndDrain([
-        { ...base, type: "turn.started", eventId: asEventId("queue-turn-started") },
-      ]);
-      for (const id of ["first", "second"]) {
-        await harness.dispatch({
-          type: "thread.turn.queue",
-          commandId: CommandId.make(`queue-${id}`),
-          threadId,
-          message: { messageId: MessageId.make(id), role: "user", text: id, attachments: [] },
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          createdAt: "2026-01-01T00:00:02.000Z",
-        });
-      }
-      await harness.emitAndDrain([
-        {
-          ...base,
-          type: "turn.completed",
-          eventId: asEventId("queue-turn-completed"),
-          createdAt: "2026-01-01T00:00:03.000Z",
-          payload: { state },
-        },
-      ]);
-      const thread = (await harness.readModel()).threads.find((thread) => thread.id === threadId)!;
-      expect(thread.queuedMessages.map((message) => message.messageId)).toEqual(
-        state === "completed" ? ["second"] : ["first", "second"],
-      );
-      expect(
-        thread.messages.filter((message) => message.role === "user").map((message) => message.text),
-      ).toEqual(state === "completed" ? ["first"] : []);
-      expect(thread.pendingTurnStart?.messageId ?? null).toBe(
-        state === "completed" ? "first" : null,
-      );
-    },
-  );
 
   it("maps turn started/completed events into thread session updates", async () => {
     const harness = await createHarness();

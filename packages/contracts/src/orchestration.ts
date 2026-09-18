@@ -595,6 +595,7 @@ export const OrchestrationSession = Schema.Struct({
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
   activeTurnId: Schema.NullOr(TurnId),
   lastError: Schema.NullOr(TrimmedNonEmptyString),
+  startedAt: Schema.optional(IsoDateTime),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationSession = typeof OrchestrationSession.Type;
@@ -1097,6 +1098,35 @@ const ThreadCreateCommand = Schema.Struct({
   historyImport: Schema.optional(Schema.Literal(true)),
 });
 
+// Freeze the selected history before copying provider and filesystem resources.
+// Explicit IDs keep null-turn messages and replay aligned with that selection.
+export const ThreadForkHistorySelection = Schema.Struct({
+  turnIds: Schema.Array(TurnId),
+  messageIds: Schema.Array(MessageId),
+  proposedPlanIds: Schema.Array(OrchestrationProposedPlanId),
+  activityIds: Schema.Array(EventId),
+});
+export type ThreadForkHistorySelection = typeof ThreadForkHistorySelection.Type;
+
+const ThreadForkCommand = Schema.Struct({
+  type: Schema.Literal("thread.fork"),
+  commandId: CommandId,
+  sourceThreadId: ThreadId,
+  throughTurnId: Schema.optional(TurnId),
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+  // Filled by the server before durable dispatch. The decider uses it as an
+  // optimistic fence around the provider/resource side effects.
+  expectedSourceTurnId: Schema.optional(TurnId),
+  expectedSourceUpdatedAt: Schema.optional(IsoDateTime),
+  preparedFork: Schema.optional(
+    Schema.Struct({
+      latestTurn: OrchestrationLatestTurn,
+      historySelection: ThreadForkHistorySelection,
+    }),
+  ),
+});
+
 const ThreadDeleteCommand = Schema.Struct({
   type: Schema.Literal("thread.delete"),
   commandId: CommandId,
@@ -1384,6 +1414,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
   ThreadCreateCommand,
+  ThreadForkCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
   ThreadUnarchiveCommand,
@@ -1417,6 +1448,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
   ThreadCreateCommand,
+  ThreadForkCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
   ThreadUnarchiveCommand,
@@ -1624,6 +1656,7 @@ export const OrchestrationEventType = Schema.Literals([
   "project.meta-updated",
   "project.deleted",
   "thread.created",
+  "thread.forked",
   "thread.deleted",
   "thread.archived",
   "thread.unarchived",
@@ -1643,6 +1676,8 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.message-sent",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
+  // Decode persisted compaction requests from older fork versions.
+  "thread.compaction-requested",
   "thread.approval-response-requested",
   "thread.user-input-response-requested",
   "thread.checkpoint-revert-requested",
@@ -1703,6 +1738,23 @@ export const ThreadCreatedPayload = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadForkedPayload = Schema.Struct({
+  sourceThreadId: ThreadId,
+  threadId: ThreadId,
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  forkedThroughTurnId: TurnId,
+  latestTurn: OrchestrationLatestTurn,
+  historySelection: Schema.optional(ThreadForkHistorySelection),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -1865,6 +1917,11 @@ export const ThreadTurnInterruptRequestedPayload = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+export const ThreadCompactionRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+
 export const ThreadApprovalResponseRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   requestId: ApprovalRequestId,
@@ -1987,6 +2044,11 @@ export const OrchestrationEvent = Schema.Union([
   }),
   Schema.Struct({
     ...EventBaseFields,
+    type: Schema.Literal("thread.forked"),
+    payload: ThreadForkedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
     type: Schema.Literal("thread.deleted"),
     payload: ThreadDeletedPayload,
   }),
@@ -2079,6 +2141,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.turn-interrupt-requested"),
     payload: ThreadTurnInterruptRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.compaction-requested"),
+    payload: ThreadCompactionRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

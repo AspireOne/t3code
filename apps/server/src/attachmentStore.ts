@@ -88,6 +88,22 @@ export function createAttachmentId(threadId: string, extension?: string): string
   return `${threadSegment}-${NodeCrypto.randomUUID()}${attachmentIdExtensionSuffix(extension)}`;
 }
 
+export function forkAttachmentForThread(
+  attachment: ChatAttachment,
+  targetThreadId: string,
+): ChatAttachment | null {
+  const threadSegment = toSafeThreadAttachmentSegment(targetThreadId);
+  const uuid = parseAttachmentUuid(attachment.id);
+  if (!threadSegment || !uuid) {
+    return null;
+  }
+  const storedExtension = parseAttachmentFileExtension(attachment.id);
+  return {
+    ...attachment,
+    id: `${threadSegment}-${uuid}${storedExtension ? `-${storedExtension}` : ""}`,
+  };
+}
+
 export function parseThreadSegmentFromAttachmentId(attachmentId: string): string | null {
   const normalizedId = normalizeAttachmentRelativePath(attachmentId);
   if (!normalizedId || normalizedId.includes("/") || normalizedId.includes(".")) {

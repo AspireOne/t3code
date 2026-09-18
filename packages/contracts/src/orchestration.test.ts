@@ -619,6 +619,85 @@ it.effect("decodes thread archive and unarchive commands", () =>
   }),
 );
 
+it.effect("decodes a thread fork with distinct source and target ids", () =>
+  Effect.gen(function* () {
+    const fork = yield* decodeClientOrchestrationCommand({
+      type: "thread.fork",
+      commandId: "cmd-fork-1",
+      sourceThreadId: "thread-source",
+      threadId: "thread-target",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.strictEqual(fork.type, "thread.fork");
+    if (fork.type !== "thread.fork") return;
+    assert.strictEqual(fork.sourceThreadId, "thread-source");
+    assert.strictEqual(fork.threadId, "thread-target");
+  }),
+);
+
+it.effect("preserves an explicit historical turn when decoding a fork command", () =>
+  Effect.gen(function* () {
+    const command = yield* decodeClientOrchestrationCommand({
+      type: "thread.fork",
+      commandId: "selected-fork",
+      sourceThreadId: "source",
+      threadId: "target",
+      throughTurnId: "historical-turn",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.equal(command.type, "thread.fork");
+    if (command.type !== "thread.fork") throw new Error("Expected fork command");
+    assert.equal(command.throughTurnId, "historical-turn");
+  }),
+);
+
+it.effect("decodes the durable thread fork event with its exact source revision", () =>
+  Effect.gen(function* () {
+    const forked = yield* decodeOrchestrationEvent({
+      type: "thread.forked",
+      eventId: "evt-fork-1",
+      sequence: 8,
+      aggregateKind: "thread",
+      aggregateId: "thread-target",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      commandId: "cmd-fork-1",
+      causationEventId: null,
+      correlationId: "cmd-fork-1",
+      metadata: {},
+      payload: {
+        sourceThreadId: "thread-source",
+        threadId: "thread-target",
+        projectId: "project-1",
+        title: "Source (fork)",
+        modelSelection: { instanceId: "codex", model: "gpt-5.6-codex" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: "main",
+        worktreePath: null,
+        forkedThroughTurnId: "turn-3",
+        latestTurn: {
+          turnId: "turn-3",
+          state: "completed",
+          requestedAt: "2026-01-01T00:00:00.000Z",
+          startedAt: "2026-01-01T00:00:00.000Z",
+          completedAt: "2026-01-01T00:00:00.000Z",
+          assistantMessageId: "message-3",
+        },
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    });
+
+    assert.strictEqual(forked.type, "thread.forked");
+    if (forked.type !== "thread.forked") return;
+    assert.strictEqual(forked.payload.sourceThreadId, "thread-source");
+    assert.strictEqual(forked.payload.threadId, "thread-target");
+    assert.strictEqual(forked.payload.forkedThroughTurnId, "turn-3");
+    assert.strictEqual(forked.payload.latestTurn.turnId, "turn-3");
+  }),
+);
+
 it.effect("decodes thread settle and unsettle commands", () =>
   Effect.gen(function* () {
     const settle = yield* decodeOrchestrationCommand({
@@ -1318,6 +1397,23 @@ it.effect("decodes orchestration session runtime mode defaults", () =>
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
+    assert.strictEqual(parsed.startedAt, undefined);
+  }),
+);
+
+it.effect("preserves an orchestration session runtime generation timestamp", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationSession({
+      threadId: "thread-1",
+      status: "ready",
+      providerName: "codex",
+      activeTurnId: null,
+      lastError: null,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:01:00.000Z",
+    });
+
+    assert.strictEqual(parsed.startedAt, "2026-01-01T00:00:00.000Z");
   }),
 );
 

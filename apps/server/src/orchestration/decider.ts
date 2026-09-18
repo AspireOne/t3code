@@ -45,6 +45,7 @@ import {
   requireThreadNotArchived,
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
+import { forkedThreadTitle } from "./threadFork.ts";
 import { threadHasQueuedTurnStart } from "./ThreadSettlementPolicy.ts";
 
 const monogramSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
@@ -52,6 +53,7 @@ const monogramSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme
 const isScriptRunCommand = Schema.is(SCRIPT_RUN_COMMAND_PATTERN);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+const MAX_QUEUED_MESSAGES = 50;
 const decodeUserInputRequestedPayload = Schema.decodeUnknownOption(UserInputRequestedPayload);
 const threadPullRequestLinksEqual = Schema.toEquivalence(Schema.NullOr(ThreadLinkedPullRequest));
 
@@ -111,6 +113,7 @@ function hasQueuedTurnStartForThread(
   thread: Pick<OrchestrationThread, "messages" | "latestTurn" | "session">,
   now: string,
 ): boolean {
+
   let latestUserMessageAt: string | null = null;
   let latestUserMessageAtMs = Number.NEGATIVE_INFINITY;
   for (const message of thread.messages) {
@@ -404,6 +407,88 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           interactionMode: command.interactionMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.fork": {
+      const source = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.sourceThreadId,
+      });
+      yield* requireThreadAbsent({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (
+        command.expectedSourceTurnId === undefined ||
+        command.expectedSourceUpdatedAt === undefined ||
+        source.latestTurn?.turnId !== command.expectedSourceTurnId ||
+        source.updatedAt !== command.expectedSourceUpdatedAt
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "The source thread changed while the fork was being prepared. Try again.",
+        });
+      }
+      if (source.latestTurn === null || source.latestTurn.completedAt === null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "A thread needs a settled turn before it can be forked.",
+        });
+      }
+      if (source.session?.status === "starting" || source.session?.status === "running") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "A running thread cannot be forked.",
+        });
+      }
+      if (hasQueuedTurnStartForThread(source, command.createdAt) || openRequests(source).size > 0) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "A thread with pending work cannot be forked.",
+        });
+      }
+      const prepared = command.throughTurnId === undefined ? undefined : command.preparedFork;
+      if (
+        command.throughTurnId !== undefined &&
+        (prepared === undefined ||
+          prepared.latestTurn.turnId !== command.throughTurnId ||
+          prepared.latestTurn.completedAt === null ||
+          prepared.latestTurn.state === "running" ||
+          !prepared.historySelection.turnIds.includes(command.throughTurnId))
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "The selected turn is unavailable or has not finished and cannot be forked.",
+        });
+      }
+      const latestTurn = prepared?.latestTurn ?? source.latestTurn;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.forked",
+        payload: {
+          sourceThreadId: source.id,
+          threadId: command.threadId,
+          projectId: source.projectId,
+          title: forkedThreadTitle(source.title),
+          modelSelection: source.modelSelection,
+          runtimeMode: source.runtimeMode,
+          interactionMode: source.interactionMode,
+          branch: source.branch,
+          worktreePath: source.worktreePath,
+          forkedThroughTurnId: latestTurn.turnId,
+          latestTurn,
+          ...(prepared === undefined ? {} : { historySelection: prepared.historySelection }),
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -1450,8 +1535,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { modelSelection: command.modelSelection }
             : {}),
           ...(command.titleSeed !== undefined ? { titleSeed: command.titleSeed } : {}),
-          runtimeMode: targetThread.runtimeMode,
-          interactionMode: targetThread.interactionMode,
+          runtimeMode: command.runtimeMode,
+          interactionMode: command.interactionMode,
           ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
           createdAt: command.createdAt,
         },

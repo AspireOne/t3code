@@ -6,7 +6,7 @@ import {
 } from "@t3tools/client-runtime/environment";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { canSnooze, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
-import { EnvironmentId, type ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, type ScopedThreadRef, ThreadId, type TurnId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/unstable/reactivity";
@@ -28,6 +28,7 @@ import {
   readEnvironmentSupportsActiveReorder,
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
+  readThreadCanFork,
   readEnvironmentThreadRefs,
   readProject,
   readThreadShell,
@@ -38,6 +39,7 @@ import { useUiStateStore } from "../uiStateStore";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
+import { newThreadId } from "../lib/utils";
 import { useClientSettings } from "./useSettings";
 import { useAtomCommand } from "../state/use-atom-command";
 
@@ -181,6 +183,9 @@ export function useThreadActions() {
     reportFailure: false,
   });
   const deleteThreadMutation = useAtomCommand(threadEnvironment.delete, {
+    reportFailure: false,
+  });
+  const forkThreadMutation = useAtomCommand(threadEnvironment.fork, {
     reportFailure: false,
   });
   const settleThreadMutation = useAtomCommand(threadEnvironment.settle, {
@@ -497,6 +502,36 @@ export function useThreadActions() {
     ],
   );
 
+  const forkThread = useCallback(
+    async (target: ScopedThreadRef, throughTurnId?: TurnId) => {
+      const thread = readThreadShell(target);
+      if (!thread) return AsyncResult.success(undefined);
+      if (!readThreadCanFork(target, throughTurnId !== undefined)) {
+        return AsyncResult.failure(
+          Cause.fail(new Error("Only idle Codex threads with a completed turn can be forked.")),
+        );
+      }
+      const targetThreadId = newThreadId();
+      const result = await forkThreadMutation({
+        environmentId: target.environmentId,
+        input: {
+          sourceThreadId: target.threadId,
+          threadId: targetThreadId,
+          ...(throughTurnId === undefined ? {} : { throughTurnId }),
+        },
+      });
+      if (result._tag === "Failure") return result;
+      const navigation = await settlePromise(() =>
+        router.navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(scopeThreadRef(target.environmentId, targetThreadId)),
+        }),
+      );
+      return navigation._tag === "Failure" ? navigation : result;
+    },
+    [forkThreadMutation, router],
+  );
+
   const settleThread = useCallback(
     async (target: ScopedThreadRef) => {
       // Version skew: never send the command to a server that predates it —
@@ -756,6 +791,7 @@ export function useThreadActions() {
       archiveThread,
       unarchiveThread,
       deleteThread,
+      forkThread,
       confirmAndDeleteThread,
       settleThread,
       unsettleThread,
@@ -772,6 +808,7 @@ export function useThreadActions() {
       confirmAndDeleteThread,
       confirmAndUnpinThread,
       deleteThread,
+      forkThread,
       pinThread,
       reorderPinnedThread,
       reorderActiveThread,

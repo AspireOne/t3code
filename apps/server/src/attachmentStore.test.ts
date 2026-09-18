@@ -9,6 +9,7 @@ import {
   attachmentFileExtension,
   createAttachmentId,
   createPendingAttachmentId,
+  forkAttachmentForThread,
   parseAttachmentUuid,
   parseAttachmentFileExtension,
   planAttachmentClaim,
@@ -73,6 +74,23 @@ describe("attachmentStore", () => {
     // look like a stale partial to the sweep.
     expect(attachmentFileExtension("archive.part")).toBe(".bin");
     expect(createAttachmentId("x".repeat(80), ".abcdefghij")?.length).toBeLessThanOrEqual(128);
+  });
+
+  it("gives forked attachments target-owned ids without changing their identity", () => {
+    const source = {
+      type: "file" as const,
+      id: "thread-source-00000000-0000-4000-8000-000000000001-pdf",
+      name: "report.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 12,
+    };
+
+    const forked = forkAttachmentForThread(source, "thread-target");
+    expect(forked).toEqual({
+      ...source,
+      id: "thread-target-00000000-0000-4000-8000-000000000001-pdf",
+    });
+    expect(source.id).toBe("thread-source-00000000-0000-4000-8000-000000000001-pdf");
   });
 
   it("resolves attachment path by id using the extension that exists on disk", () => {

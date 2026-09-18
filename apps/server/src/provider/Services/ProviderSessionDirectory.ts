@@ -51,6 +51,9 @@ export interface ProviderSessionDirectoryShape {
     options?: ProviderSessionDirectoryUpsertOptions,
   ) => Effect.Effect<void, ProviderSessionDirectoryWriteError>;
 
+  readonly remove?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<void, ProviderSessionDirectoryPersistenceError>;
   /** Record an imported file without changing the current provider session. */
   readonly recordImportedTranscript: (input: {
     readonly threadId: ThreadId;

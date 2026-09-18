@@ -63,6 +63,11 @@ import { ProjectionThreadProposedPlan } from "../../persistence/Services/Project
 import { ProjectionThreadPullRequest } from "../../persistence/ProjectionThreadPullRequests.ts";
 import { ProjectionThreadSession } from "../../persistence/Services/ProjectionThreadSessions.ts";
 import { ProjectionThread } from "../../persistence/Services/ProjectionThreads.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
+import { ProjectionThreadActivityRepository } from "../../persistence/Services/ProjectionThreadActivities.ts";
+import { ProjectionThreadActivityRepositoryLive } from "../../persistence/Layers/ProjectionThreadActivities.ts";
+import { selectThreadForkHistory } from "../threadFork.ts";
 import {
   decodeThreadDetailPageCursor,
   encodeThreadDetailPageCursor,
@@ -382,6 +387,7 @@ function mapSessionRow(
     runtimeMode: row.runtimeMode,
     activeTurnId: row.activeTurnId,
     lastError: row.lastError,
+    ...(row.startedAt !== null ? { startedAt: row.startedAt } : {}),
     updatedAt: row.updatedAt,
   };
 }
@@ -486,6 +492,8 @@ function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: st
 }
 
 const makeProjectionSnapshotQuery = Effect.gen(function* () {
+  const forkTurns = yield* ProjectionTurnRepository;
+  const forkActivities = yield* ProjectionThreadActivityRepository;
   const threadBackgroundLiveness = yield* ThreadBackgroundLivenessService;
   const threadPlanProgress = yield* ThreadPlanProgressService;
   const sql = yield* SqlClient.SqlClient;
@@ -827,6 +835,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           runtime_mode AS "runtimeMode",
           active_turn_id AS "activeTurnId",
           last_error AS "lastError",
+          started_at AS "startedAt",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
         ORDER BY thread_id ASC
@@ -848,6 +857,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sessions.runtime_mode AS "runtimeMode",
           sessions.active_turn_id AS "activeTurnId",
           sessions.last_error AS "lastError",
+          sessions.started_at AS "startedAt",
           sessions.updated_at AS "updatedAt"
         FROM projection_thread_sessions sessions
         INNER JOIN projection_threads threads
@@ -873,6 +883,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sessions.runtime_mode AS "runtimeMode",
           sessions.active_turn_id AS "activeTurnId",
           sessions.last_error AS "lastError",
+          sessions.started_at AS "startedAt",
           sessions.updated_at AS "updatedAt"
         FROM projection_thread_sessions sessions
         INNER JOIN projection_threads threads
@@ -1259,6 +1270,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sessions.runtime_mode AS "runtimeMode",
           sessions.active_turn_id AS "activeTurnId",
           sessions.last_error AS "lastError",
+          sessions.started_at AS "startedAt",
           sessions.updated_at AS "updatedAt"
         FROM projection_threads AS threads
         LEFT JOIN projection_thread_sessions AS sessions
@@ -1577,6 +1589,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           runtime_mode AS "runtimeMode",
           active_turn_id AS "activeTurnId",
           last_error AS "lastError",
+          started_at AS "startedAt",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
         WHERE thread_id = ${threadId}
@@ -2250,6 +2263,7 @@ pending_approval_requests AS (
                   runtimeMode: row.runtimeMode,
                   activeTurnId: row.activeTurnId,
                   lastError: row.lastError,
+                  ...(row.startedAt !== null ? { startedAt: row.startedAt } : {}),
                   updatedAt: row.updatedAt,
                 });
               }
@@ -3723,7 +3737,37 @@ pending_approval_requests AS (
         ),
       );
 
+  const getThreadForkContext: ProjectionSnapshotQueryShape["getThreadForkContext"] = Effect.fn(
+    "ProjectionSnapshotQuery.getThreadForkContext",
+  )(function* (threadId, throughTurnId) {
+    return yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const snapshot = yield* getThreadDetailById(threadId, { activityKinds: [] });
+          if (Option.isNone(snapshot)) return Option.none();
+          const turns = yield* forkTurns.listByThreadId({ threadId });
+          const activities = yield* forkActivities.listByThreadId({ threadId });
+          const source = {
+            ...snapshot.value,
+            activities: activities.map((activity) => ({ ...activity, id: activity.activityId })),
+          };
+          const prepared = selectThreadForkHistory(source, turns, throughTurnId);
+          return prepared === null ? Option.none() : Option.some({ source, ...prepared });
+        }),
+      )
+      .pipe(
+        Effect.mapError((error) =>
+          isPersistenceError(error)
+            ? error
+            : toPersistenceSqlError("ProjectionSnapshotQuery.getThreadForkContext:transaction")(
+                error,
+              ),
+        ),
+      );
+  });
+
   return {
+    getThreadForkContext,
     getCommandReadModel,
     getUserInputActivity,
     listActivitiesByKind,
@@ -3752,4 +3796,4 @@ pending_approval_requests AS (
 export const OrchestrationProjectionSnapshotQueryLive = Layer.effect(
   ProjectionSnapshotQuery,
   makeProjectionSnapshotQuery,
-);
+).pipe(Layer.provide([ProjectionTurnRepositoryLive, ProjectionThreadActivityRepositoryLive]));

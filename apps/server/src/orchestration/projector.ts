@@ -35,6 +35,7 @@ import {
   ThreadArchivedPayload,
   ThreadCreatedPayload,
   ThreadDeletedPayload,
+  ThreadForkedPayload,
   ThreadInteractionModeSetPayload,
   ThreadMetaUpdatedPayload,
   ThreadProposedPlanUpsertedPayload,
@@ -54,6 +55,7 @@ import {
   ThreadSessionSetPayload,
   ThreadTurnDiffCompletedPayload,
 } from "./Schemas.ts";
+import { cloneThreadForFork } from "./threadFork.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
@@ -457,6 +459,25 @@ export function projectEvent(
           threads: existing
             ? nextBase.threads.map((entry) => (entry.id === thread.id ? thread : entry))
             : [...nextBase.threads, thread],
+        };
+      });
+
+    case "thread.forked":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          ThreadForkedPayload,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        const source = nextBase.threads.find((thread) => thread.id === payload.sourceThreadId);
+        if (source === undefined) {
+          return nextBase;
+        }
+        const thread = cloneThreadForFork(source, event);
+        return {
+          ...nextBase,
+          threads: [...nextBase.threads.filter((entry) => entry.id !== thread.id), thread],
         };
       });
 

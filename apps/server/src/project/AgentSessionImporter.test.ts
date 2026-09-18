@@ -135,8 +135,6 @@ const makeProjectedThread = (input: {
     settledOverride: null,
     settledAt: null,
     deletedAt: null,
-    queuedMessages: [],
-    pendingTurnStart: null,
     messages: input.imported
       ? [
           {

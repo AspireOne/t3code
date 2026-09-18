@@ -125,6 +125,7 @@ import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import {
+  readThreadCanFork,
   readThreadShell,
   useAllEnvironmentProjectSnapshotsReady,
   useProjects,
@@ -2150,6 +2151,7 @@ export default function Sidebar() {
     reorderActiveThread,
     archiveThread,
     deleteThread,
+    forkThread,
   } = useThreadActions();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -4034,6 +4036,13 @@ export default function Sidebar() {
         const supportsTitleRegeneration =
           serverConfigs.get(thread.environmentId)?.environment.capabilities
             .threadTitleRegeneration === true;
+        const forkProviderInstanceId =
+          thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
+        const supportsForking =
+          serverConfigs.get(thread.environmentId)?.environment.capabilities.threadForking ===
+            true &&
+          providerEntriesByEnvironment.get(thread.environmentId)?.get(forkProviderInstanceId)
+            ?.driverKind === "codex";
         const isRegeneratingTitle = thread.titleRegeneration != null;
         const isSettled = settledThreadKeysRef.current.has(threadKey);
         const isSnoozed = snoozedThreadKeysRef.current.has(threadKey);
@@ -4048,6 +4057,7 @@ export default function Sidebar() {
               isSettled,
               isSnoozed,
               canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
+              canFork: readThreadCanFork(threadRef),
               isRegeneratingTitle,
               isRunning:
                 thread.session?.status === "running" && thread.session.activeTurnId != null,
@@ -4056,6 +4066,7 @@ export default function Sidebar() {
                 snooze: supportsSnooze,
                 pinning: supportsPinning,
                 titleRegeneration: supportsTitleRegeneration,
+                forking: supportsForking,
               },
               snoozePresets,
             }),
@@ -4081,6 +4092,20 @@ export default function Sidebar() {
               ),
             );
             if (projectGroup) openProjectSettings(projectGroup);
+            return;
+          }
+          case "fork": {
+            const result = await forkThread(threadRef);
+            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+              const error = squashAtomCommandFailure(result);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Failed to fork thread",
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                }),
+              );
+            }
             return;
           }
           case "new-thread-on-branch": {

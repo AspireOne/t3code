@@ -5455,6 +5455,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     provider: PROVIDER,
     capabilities: {
       sessionModelSwitch: "in-session",
+      threadFork: "unsupported",
     },
     compaction: { type: "slash-command", command: "/compact" },
     startSession,
