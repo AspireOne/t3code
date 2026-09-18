@@ -406,6 +406,20 @@ export const DesktopUpdateStateSchema = Schema.Struct({
   canRetry: Schema.Boolean,
 });
 
+export interface DesktopUpstreamReleaseStatus {
+  currentVersion: string;
+  latestVersion: string;
+  releaseUrl: string;
+  updateAvailable: boolean;
+}
+
+export const DesktopUpstreamReleaseStatusSchema = Schema.Struct({
+  currentVersion: Schema.String,
+  latestVersion: Schema.String,
+  releaseUrl: Schema.String,
+  updateAvailable: Schema.Boolean,
+});
+
 export interface DesktopUpdateActionResult {
   accepted: boolean;
   completed: boolean;
@@ -1231,6 +1245,8 @@ export interface DesktopBridge {
   getLocalEnvironmentEnabled?: () => boolean;
   setLocalEnvironmentEnabled?: (enabled: boolean) => Promise<void>;
   getLocalEnvironmentBearerToken: () => Promise<string>;
+  /** Optional while older desktop shells can host a newer web client. */
+  restart?: () => Promise<void>;
   getClientSettings: () => Promise<ClientSettings | null>;
   setClientSettings: (settings: ClientSettings) => Promise<void>;
   getConnectionCatalog?: () => Promise<string | null>;
@@ -1329,6 +1345,8 @@ export interface DesktopBridge {
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
   installUpdate: () => Promise<DesktopUpdateActionResult>;
   onUpdateState: (listener: (state: DesktopUpdateState) => void) => () => void;
+  /** Fork builds use this to advertise newer stable upstream source releases. */
+  checkUpstreamRelease?: () => Promise<DesktopUpstreamReleaseStatus | null>;
   /** Present when the desktop shell accepts `t3 app` activation requests. */
   appActivation?: {
     setReady: (ready: boolean) => Promise<void>;

@@ -2,6 +2,7 @@ import * as Effect from "effect/Effect";
 
 import * as DesktopIpc from "./DesktopIpc.ts";
 import { installNotificationBadge } from "./methods/notificationBadge.ts";
+import { restartDesktop } from "./methods/lifecycle.ts";
 import { getClientSettings, setClientSettings } from "./methods/clientSettings.ts";
 import {
   clearConnectionCatalog,
@@ -31,6 +32,7 @@ import {
 } from "./methods/sshEnvironment.ts";
 import {
   checkForUpdate,
+  checkUpstreamRelease,
   downloadUpdate,
   getUpdateState,
   installUpdate,
@@ -86,6 +88,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handleSync(getLocalEnvironmentEnabled);
   yield* ipc.handle(setLocalEnvironmentEnabled);
   yield* ipc.handle(getLocalEnvironmentBearerToken);
+  yield* ipc.handle(restartDesktop);
 
   yield* ipc.handle(getClientSettings);
   yield* ipc.handle(setClientSettings);
@@ -140,6 +143,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(downloadUpdate);
   yield* ipc.handle(installUpdate);
   yield* ipc.handle(checkForUpdate);
+  yield* ipc.handle(checkUpstreamRelease);
   for (const previewMethod of PreviewIpc.methods) {
     yield* ipc.handle(previewMethod);
   }

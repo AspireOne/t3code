@@ -14,6 +14,7 @@ import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopState from "./DesktopState.ts";
+import * as DesktopTray from "./DesktopTray.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 
 export class DesktopLifecycleRelaunchError extends Schema.TaggedError<DesktopLifecycleRelaunchError>()(
@@ -38,10 +39,11 @@ export type DesktopLifecycleRuntimeServices =
 
 type DesktopLifecycleRegistrationServices =
   | DesktopLifecycleRuntimeServices
+  | DesktopTray.DesktopTray
   | ElectronWindow.ElectronWindow;
 
 /**
- * @effect-expect-leaking DesktopEnvironment | DesktopShutdown | DesktopState | DesktopWindow | ElectronApp | ElectronTheme | ElectronWindow
+ * @effect-expect-leaking DesktopEnvironment | DesktopShutdown | DesktopState | DesktopTray | DesktopWindow | ElectronApp | ElectronTheme | ElectronWindow
  */
 export class DesktopLifecycle extends Context.Service<
   DesktopLifecycle,
@@ -99,9 +101,13 @@ function handleBeforeQuit(
   runEffect: <A, E>(
     effect: Effect.Effect<A, E, DesktopLifecycleRegistrationServices>,
   ) => Promise<A>,
+  allowWindowClose: () => void,
   allowQuit: () => boolean,
   markQuitAllowed: () => void,
 ): void {
+  // Window close handlers run synchronously; open this gate before any async
+  // shutdown work so app-initiated closes are not redirected to the tray.
+  allowWindowClose();
   if (allowQuit()) {
     void runEffect(
       Effect.gen(function* () {
@@ -165,10 +171,11 @@ export const make = DesktopLifecycle.of({
     const electronApp = yield* ElectronApp.ElectronApp;
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const state = yield* DesktopState.DesktopState;
+    const wasQuitting = yield* Ref.getAndSet(state.quitting, true);
+    if (wasQuitting) return;
     yield* logLifecycleInfo("desktop relaunch requested", { reason });
     yield* Effect.gen(function* () {
       yield* Effect.yieldNow;
-      yield* Ref.set(state.quitting, true);
       yield* requestDesktopShutdownAndWait();
       if (environment.isDevelopment) {
         yield* electronApp.exit(75);
@@ -190,6 +197,7 @@ export const make = DesktopLifecycle.of({
   }),
   register: Effect.gen(function* () {
     const desktopWindow = yield* DesktopWindow.DesktopWindow;
+    const desktopTray = yield* DesktopTray.DesktopTray;
     const electronWindow = yield* ElectronWindow.ElectronWindow;
     const electronApp = yield* ElectronApp.ElectronApp;
     const electronTheme = yield* ElectronTheme.ElectronTheme;
@@ -207,6 +215,9 @@ export const make = DesktopLifecycle.of({
       // Electron's updater owns the remaining quit/install/relaunch sequence.
       // Cancelling the following app "before-quit" event breaks that sequence,
       // most visibly on macOS where the native updater performs the relaunch.
+      // On Windows, the updater can close windows before emitting "before-quit",
+      // so open the window-close gate here as well.
+      desktopTray.allowMainWindowClose();
       updaterQuitAllowed = true;
       // This event is synchronous and the updater's quit proceeds as soon as
       // the listener returns, so a forked destroyAll would race the quit
@@ -226,6 +237,7 @@ export const make = DesktopLifecycle.of({
       handleBeforeQuit(
         event,
         runEffect,
+        desktopTray.allowMainWindowClose,
         () => quitAllowed || updaterQuitAllowed,
         () => {
           quitAllowed = true;
