@@ -84,6 +84,9 @@ import { isMacPlatform } from "../lib/utils";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
 import {
+  readEnvironmentProviderDriver,
+  readEnvironmentSupportsThreadForking,
+  readThreadCanFork,
   readThreadShell,
   useProjects,
   useThreadShells,
@@ -116,6 +119,7 @@ import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useDesktopUpdateState } from "../state/desktopUpdate";
 
 import { useThreadActions } from "../hooks/useThreadActions";
+import { onThreadRenameRequest } from "../threadRenameBus";
 import { projectEnvironment } from "../state/projects";
 import { threadEnvironment, useEnvironmentThread } from "../state/threads";
 import { useEnvironment, useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
@@ -1132,6 +1136,7 @@ interface SidebarProjectItemProps {
   handleNewThread: ReturnType<typeof useNewThreadHandler>;
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
+  forkThread: ReturnType<typeof useThreadActions>["forkThread"];
   threadJumpLabelByKey: ReadonlyMap<string, string>;
   attachThreadListAutoAnimateRef: (node: HTMLElement | null) => void;
   expandThreadListForProject: (projectKey: string) => void;
@@ -1153,6 +1158,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     handleNewThread,
     archiveThread,
     deleteThread,
+    forkThread,
     threadJumpLabelByKey,
     attachThreadListAutoAnimateRef,
     expandThreadListForProject,
@@ -1194,7 +1200,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const router = useRouter();
   const queuePendingFileDrop = useSidebarPendingFileDropStore((s) => s.queuePendingFileDrop);
   const clearPendingFileDrop = useSidebarPendingFileDropStore((s) => s.clearPendingFileDrop);
-  const { isMobile, setOpenMobile } = useSidebar();
+  const { isMobile, setOpen, setOpenMobile } = useSidebar();
   const markThreadUnread = useUiStateStore((state) => state.markThreadUnread);
   const setProjectExpanded = useUiStateStore((state) => state.setProjectExpanded);
   const toggleThreadSelection = useThreadSelectionStore((state) => state.toggleThread);
@@ -2103,6 +2109,33 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     setRenamingTitle(title);
     renamingCommittedRef.current = false;
   }, []);
+  useEffect(() => {
+    return onThreadRenameRequest((threadRef) => {
+      const threadKey = scopedThreadKey(threadRef);
+      const thread = sidebarThreadByKeyRef.current.get(threadKey);
+      if (!thread || thread.archivedAt !== null) return false;
+      if (projectExpanded && hasOverflowingThreads && !isThreadListExpanded) {
+        expandThreadListForProject(project.projectKey);
+      }
+      if (isMobile) {
+        setOpenMobile(true);
+      } else {
+        setOpen(true);
+      }
+      startThreadRename(threadKey, thread.title);
+      return true;
+    });
+  }, [
+    expandThreadListForProject,
+    hasOverflowingThreads,
+    isMobile,
+    isThreadListExpanded,
+    project.projectKey,
+    projectExpanded,
+    setOpen,
+    setOpenMobile,
+    startThreadRename,
+  ]);
 
   const commitRename = useCallback(
     async (threadRef: ScopedThreadRef, newTitle: string, originalTitle: string) => {
@@ -2238,10 +2271,18 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       );
       const threadWorkspacePath =
         thread.worktreePath ?? threadProject?.workspaceRoot ?? project.workspaceRoot ?? null;
+      const forkProviderInstanceId =
+        thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
+      const supportsForking =
+        readEnvironmentSupportsThreadForking(thread.environmentId) &&
+        readEnvironmentProviderDriver(thread.environmentId, forkProviderInstanceId) === "codex";
       const clicked = await api.contextMenu.show(
         [
           ...(thread.branch
             ? [{ id: "new-thread-on-branch", label: `New thread on ${thread.branch}` }]
+            : []),
+          ...(supportsForking
+            ? [{ id: "fork", label: "Fork thread", disabled: !readThreadCanFork(threadRef) }]
             : []),
           { id: "rename", label: "Rename thread" },
           { id: "mark-unread", label: "Mark unread" },
@@ -2252,6 +2293,21 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         ],
         position,
       );
+
+      if (clicked === "fork") {
+        const result = await forkThread(threadRef);
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to fork thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+        return;
+      }
 
       if (clicked === "project-settings") {
         if (isMobile) setOpenMobile(false);
@@ -2343,6 +2399,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       copyPathToClipboard,
       copyThreadIdToClipboard,
       deleteThread,
+      forkThread,
       handleNewThread,
       isMobile,
       markThreadUnread,
@@ -2886,6 +2943,7 @@ interface SidebarProjectsContentProps {
   handleNewThread: ReturnType<typeof useNewThreadHandler>;
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
+  forkThread: ReturnType<typeof useThreadActions>["forkThread"];
   sortedProjects: readonly SidebarProjectSnapshot[];
   expandedThreadListsByProject: ReadonlySet<string>;
   activeRouteProjectKey: string | null;
@@ -2928,6 +2986,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     handleNewThread,
     archiveThread,
     deleteThread,
+    forkThread,
     sortedProjects,
     expandedThreadListsByProject,
     activeRouteProjectKey,
@@ -3079,6 +3138,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                         handleNewThread={handleNewThread}
                         archiveThread={archiveThread}
                         deleteThread={deleteThread}
+                        forkThread={forkThread}
                         threadJumpLabelByKey={threadJumpLabelByKey}
                         attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
                         expandThreadListForProject={expandThreadListForProject}
@@ -3112,6 +3172,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                 handleNewThread={handleNewThread}
                 archiveThread={archiveThread}
                 deleteThread={deleteThread}
+                forkThread={forkThread}
                 threadJumpLabelByKey={threadJumpLabelByKey}
                 attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
                 expandThreadListForProject={expandThreadListForProject}
@@ -3147,7 +3208,7 @@ export default function LegacySidebar() {
   const sidebarThreadPreviewCount = useClientSettings((s) => s.sidebarThreadPreviewCount);
   const updateSettings = useUpdateClientSettings();
   const handleNewThread = useNewThreadHandler();
-  const { archiveThread, deleteThread } = useThreadActions();
+  const { archiveThread, deleteThread, forkThread } = useThreadActions();
   const { isMobile, setOpenMobile } = useSidebar();
   const routeTarget = useParams({
     strict: false,
@@ -3799,6 +3860,7 @@ export default function LegacySidebar() {
         handleNewThread={handleNewThread}
         archiveThread={archiveThread}
         deleteThread={deleteThread}
+        forkThread={forkThread}
         sortedProjects={sortedProjects}
         expandedThreadListsByProject={expandedThreadListsByProject}
         activeRouteProjectKey={activeRouteProjectKey}

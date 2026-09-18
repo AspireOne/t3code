@@ -6,6 +6,8 @@ import {
   type KeybindingCommand,
   THREAD_JUMP_KEYBINDING_COMMANDS,
 } from "@t3tools/contracts";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import type { ScopedThreadRef } from "@t3tools/contracts";
 import { filterFilesystemBrowseEntries } from "@t3tools/client-runtime/state/filesystem";
 import type { SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import * as Arr from "effect/Array";
@@ -144,7 +146,51 @@ export interface CommandPaletteItem {
 export interface CommandPaletteActionItem extends CommandPaletteItem {
   readonly kind: "action";
   readonly keepOpen?: boolean;
+  /** Keep focus on the destination when this action closes the palette. */
+  readonly preserveFocusOnClose?: boolean;
   readonly run: () => Promise<void>;
+}
+
+export function buildRenameThreadActionItem(input: {
+  thread: Pick<SidebarThreadSummary, "environmentId" | "id">;
+  icon: ReactNode;
+  requestRename: (threadRef: ScopedThreadRef) => void;
+}): CommandPaletteActionItem {
+  return {
+    kind: "action",
+    value: "action:rename-thread",
+    searchTerms: ["rename thread", "rename", "edit title", "title"],
+    title: "Rename thread",
+    icon: input.icon,
+    preserveFocusOnClose: true,
+    run: async () => {
+      input.requestRename(scopeThreadRef(input.thread.environmentId, input.thread.id));
+    },
+  };
+}
+
+export function shouldShowDesktopDeleteThreadAction(input: {
+  readonly isDesktop: boolean;
+  readonly thread: Pick<SidebarThreadSummary, "archivedAt"> | null;
+}): boolean {
+  return input.isDesktop && input.thread !== null && input.thread.archivedAt === null;
+}
+
+export function buildDeleteThreadActionItem(input: {
+  thread: Pick<SidebarThreadSummary, "environmentId" | "id">;
+  icon: ReactNode;
+  deleteThread: (threadRef: ScopedThreadRef) => Promise<void>;
+}): CommandPaletteActionItem {
+  return {
+    kind: "action",
+    value: "action:delete-thread",
+    searchTerms: ["delete thread", "delete", "remove conversation", "conversation"],
+    title: "Delete thread",
+    icon: input.icon,
+    run: async () => {
+      await input.deleteThread(scopeThreadRef(input.thread.environmentId, input.thread.id));
+    },
+  };
 }
 
 export interface CommandPaletteSubmenuItem extends CommandPaletteItem {
@@ -158,6 +204,33 @@ export interface CommandPaletteGroup {
   readonly value: string;
   readonly label: string;
   readonly items: ReadonlyArray<CommandPaletteActionItem | CommandPaletteSubmenuItem>;
+}
+
+export function resolveCommandPaletteHighlightedItemValue(input: {
+  groups: ReadonlyArray<CommandPaletteGroup>;
+  highlightedItemValue: string | null;
+  autoHighlight: boolean;
+}): string | null {
+  for (const group of input.groups) {
+    for (const item of group.items) {
+      if (!item.disabled && item.value === input.highlightedItemValue) {
+        return item.value;
+      }
+    }
+  }
+
+  if (!input.autoHighlight) {
+    return null;
+  }
+
+  for (const group of input.groups) {
+    const firstEnabledItem = group.items.find((item) => !item.disabled);
+    if (firstEnabledItem) {
+      return firstEnabledItem.value;
+    }
+  }
+
+  return null;
 }
 
 export interface CommandPaletteView {

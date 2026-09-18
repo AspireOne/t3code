@@ -5,12 +5,16 @@ import {
   buildBrowseGroups,
   buildCommandPaletteProjectMetadata,
   buildProjectActionItems,
+  buildDeleteThreadActionItem,
+  buildRenameThreadActionItem,
   buildThreadActionItems,
   buildLinkedThreadActionItems,
   enumerateCommandPaletteItems,
   filterPinnedBrowseEntries,
   filterCommandPaletteGroups,
   reduceCommandPaletteUiState,
+  resolveCommandPaletteHighlightedItemValue,
+  shouldShowDesktopDeleteThreadAction,
   type CommandPaletteGroup,
 } from "./CommandPalette.logic";
 
@@ -271,6 +275,82 @@ describe("reduceCommandPaletteUiState", () => {
   });
 });
 
+describe("resolveCommandPaletteHighlightedItemValue", () => {
+  const action = (value: string, disabled = false) => ({
+    kind: "action" as const,
+    value,
+    searchTerms: [],
+    title: value,
+    icon: null,
+    disabled,
+    run: async () => undefined,
+  });
+
+  it("preselects the first enabled result after a query clears the current highlight", () => {
+    const groups: CommandPaletteGroup[] = [
+      { value: "actions", label: "Actions", items: [action("disabled", true)] },
+      { value: "threads", label: "Threads", items: [action("first"), action("second")] },
+    ];
+
+    expect(
+      resolveCommandPaletteHighlightedItemValue({
+        groups,
+        highlightedItemValue: null,
+        autoHighlight: true,
+      }),
+    ).toBe("first");
+  });
+
+  it("preserves an explicitly highlighted visible result", () => {
+    const groups: CommandPaletteGroup[] = [
+      { value: "actions", label: "Actions", items: [action("first"), action("second")] },
+    ];
+
+    expect(
+      resolveCommandPaletteHighlightedItemValue({
+        groups,
+        highlightedItemValue: "second",
+        autoHighlight: true,
+      }),
+    ).toBe("second");
+  });
+
+  it("falls back when the previous result is no longer visible", () => {
+    const groups: CommandPaletteGroup[] = [
+      { value: "actions", label: "Actions", items: [action("first"), action("third")] },
+    ];
+
+    expect(
+      resolveCommandPaletteHighlightedItemValue({
+        groups,
+        highlightedItemValue: "second",
+        autoHighlight: true,
+      }),
+    ).toBe("first");
+  });
+
+  it("does not create a highlight when automatic highlighting is disabled or no results exist", () => {
+    const groups: CommandPaletteGroup[] = [
+      { value: "actions", label: "Actions", items: [action("first")] },
+    ];
+
+    expect(
+      resolveCommandPaletteHighlightedItemValue({
+        groups,
+        highlightedItemValue: null,
+        autoHighlight: false,
+      }),
+    ).toBeNull();
+    expect(
+      resolveCommandPaletteHighlightedItemValue({
+        groups: [],
+        highlightedItemValue: null,
+        autoHighlight: true,
+      }),
+    ).toBeNull();
+  });
+});
+
 describe("enumerateCommandPaletteItems", () => {
   it("assigns positional jump shortcuts to the first nine displayed items", () => {
     const items = Array.from({ length: 10 }, (_, index) => ({
@@ -295,6 +375,96 @@ describe("enumerateCommandPaletteItems", () => {
       "thread.jump.9",
       undefined,
     ]);
+  });
+});
+
+describe("buildRenameThreadActionItem", () => {
+  it("creates a searchable action that requests the current thread and preserves destination focus", async () => {
+    const thread = makeThread();
+    const requestRename = vi.fn();
+    const item = buildRenameThreadActionItem({
+      thread,
+      icon: null,
+      requestRename,
+    });
+
+    expect(item).toMatchObject({
+      value: "action:rename-thread",
+      title: "Rename thread",
+      searchTerms: ["rename thread", "rename", "edit title", "title"],
+      preserveFocusOnClose: true,
+    });
+
+    expect(
+      filterCommandPaletteGroups({
+        activeGroups: [{ value: "actions", label: "Actions", items: [item] }],
+        query: "rename thread",
+        isInSubmenu: false,
+        projectSearchItems: [],
+        threadSearchItems: [],
+      }),
+    ).toMatchObject([{ value: "actions", items: [item] }]);
+
+    await item.run();
+
+    expect(requestRename).toHaveBeenCalledWith({
+      environmentId: thread.environmentId,
+      threadId: thread.id,
+    });
+  });
+});
+
+describe("buildDeleteThreadActionItem", () => {
+  it("creates a searchable action that invokes deletion for the scoped current thread", async () => {
+    const thread = makeThread();
+    const deleteThread = vi.fn(async () => undefined);
+    const item = buildDeleteThreadActionItem({
+      thread,
+      icon: null,
+      deleteThread,
+    });
+
+    expect(item).toMatchObject({
+      value: "action:delete-thread",
+      title: "Delete thread",
+      searchTerms: ["delete thread", "delete", "remove conversation", "conversation"],
+    });
+    expect(
+      filterCommandPaletteGroups({
+        activeGroups: [{ value: "actions", label: "Actions", items: [item] }],
+        query: "delete thread",
+        isInSubmenu: false,
+        projectSearchItems: [],
+        threadSearchItems: [],
+      }),
+    ).toMatchObject([{ value: "actions", items: [item] }]);
+
+    await item.run();
+
+    expect(deleteThread).toHaveBeenCalledWith({
+      environmentId: thread.environmentId,
+      threadId: thread.id,
+    });
+  });
+});
+
+describe("shouldShowDesktopDeleteThreadAction", () => {
+  it("only exposes deletion for an active thread in the desktop client", () => {
+    const activeThread = makeThread();
+
+    expect(shouldShowDesktopDeleteThreadAction({ isDesktop: true, thread: activeThread })).toBe(
+      true,
+    );
+    expect(shouldShowDesktopDeleteThreadAction({ isDesktop: false, thread: activeThread })).toBe(
+      false,
+    );
+    expect(
+      shouldShowDesktopDeleteThreadAction({
+        isDesktop: true,
+        thread: makeThread({ archivedAt: "2026-03-02T00:00:00.000Z" }),
+      }),
+    ).toBe(false);
+    expect(shouldShowDesktopDeleteThreadAction({ isDesktop: true, thread: null })).toBe(false);
   });
 });
 
@@ -326,6 +496,8 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     interactionMode: "default",
     session: null,
     messages: [],
+    queuedMessages: [],
+    pendingTurnStart: null,
     proposedPlans: [],
     createdAt: "2026-03-01T00:00:00.000Z",
     archivedAt: null,

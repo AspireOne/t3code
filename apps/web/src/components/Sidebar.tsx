@@ -118,6 +118,7 @@ import {
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
+import { onThreadRenameRequest } from "../threadRenameBus";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
@@ -2132,7 +2133,7 @@ export default function Sidebar() {
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
   const router = useRouter();
-  const { isMobile, setOpenMobile } = useSidebar();
+  const { isMobile, setOpen, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
@@ -2944,6 +2945,20 @@ export default function Sidebar() {
     setRenamingThreadKey(scopedThreadKey(threadRef));
     setRenamingTitle(title);
   }, []);
+  useEffect(() => {
+    return onThreadRenameRequest((threadRef) => {
+      const thread = readThreadShell(threadRef);
+      if (!thread || thread.archivedAt !== null) return false;
+      setProjectScopeKey(null);
+      if (isMobile) {
+        setOpenMobile(true);
+      } else {
+        setOpen(true);
+      }
+      startThreadRename(threadRef, thread.title);
+      return true;
+    });
+  }, [isMobile, setOpen, setOpenMobile, setProjectScopeKey, startThreadRename]);
   const cancelThreadRename = useCallback(() => setRenamingThreadKey(null), []);
   const commitThreadRename = useCallback(
     (threadRef: ScopedThreadRef, title: string, originalTitle: string) => {
@@ -4083,6 +4098,20 @@ export default function Sidebar() {
           return;
         }
         switch (clicked.value) {
+          case "fork": {
+            const result = await forkThread(threadRef);
+            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+              const error = squashAtomCommandFailure(result);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Failed to fork thread",
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                }),
+              );
+            }
+            return;
+          }
           case "project-settings": {
             const projectGroup = projectGroupsRef.current.find((group) =>
               group.memberProjectRefs.some(
@@ -4265,10 +4294,12 @@ export default function Sidebar() {
       copyPathToClipboard,
       copyThreadIdToClipboard,
       deleteThread,
+      forkThread,
       handleMultiSelectContextMenu,
       markThreadUnread,
       openProjectSettings,
       projectByKey,
+      providerEntriesByEnvironment,
       serverConfigs,
       startThreadRename,
       updateThreadMetadata,

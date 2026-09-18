@@ -35,6 +35,7 @@ import {
   type SourceControlDiscoveryResult,
   type SourceControlProviderKind,
   type SourceControlRepositoryInfo,
+  type ScopedThreadRef,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
   resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
@@ -50,9 +51,12 @@ import {
   LinkIcon,
   MessageSquareIcon,
   PaletteIcon,
+  PencilIcon,
+  RotateCcwIcon,
   SettingsIcon,
   SquarePenIcon,
   TextSearchIcon,
+  Trash2Icon,
 } from "lucide-react";
 import {
   useCallback,
@@ -70,7 +74,9 @@ import { useAtomValue } from "@effect/atom-react";
 
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
+import { isElectron } from "../env";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useThreadActions } from "../hooks/useThreadActions";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { useClientSettings } from "../hooks/useSettings";
@@ -84,7 +90,14 @@ import { sourceControlEnvironment } from "../state/sourceControl";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
-import { useProjects, useServerConfigs, useThreadShells, waitForProject } from "../state/entities";
+import {
+  readThreadCanFork,
+  readThreadShell,
+  useProjects,
+  useServerConfigs,
+  useThreadShells,
+  waitForProject,
+} from "../state/entities";
 import { useThreadSearch } from "../state/queries";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
@@ -99,6 +112,7 @@ import {
   resolveProjectPathForDispatch,
 } from "../lib/projectPaths";
 import { onOpenCommandPalette } from "../commandPaletteBus";
+import { requestThreadRename } from "../threadRenameBus";
 import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import {
@@ -128,7 +142,9 @@ import {
   browseInputEndPaddingClass,
   buildBrowseGroups,
   buildCommandPaletteProjectMetadata,
+  buildDeleteThreadActionItem,
   buildProjectActionItems,
+  buildRenameThreadActionItem,
   buildRootGroups,
   buildThreadActionItems,
   buildLinkedThreadActionItems,
@@ -144,6 +160,8 @@ import {
   ITEM_ICON_CLASS,
   RECENT_THREAD_LIMIT,
   reduceCommandPaletteUiState,
+  resolveCommandPaletteHighlightedItemValue,
+  shouldShowDesktopDeleteThreadAction,
   type SearchOverlayMode,
 } from "./CommandPalette.logic";
 import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
@@ -455,6 +473,15 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { theme, themeHalves, resolvedTheme } = useTheme();
   const composerHandleRef = useRef<ChatComposerHandle | null>(null);
+  const preserveFocusOnCloseRef = useRef(false);
+  const preserveFocusOnClose = useCallback(() => {
+    preserveFocusOnCloseRef.current = true;
+  }, []);
+  const shouldPreserveFocusOnClose = useCallback(() => {
+    if (!preserveFocusOnCloseRef.current) return false;
+    preserveFocusOnCloseRef.current = false;
+    return true;
+  }, []);
   const routeTarget = useParams({
     strict: false,
     select: (params) => resolveThreadRouteTarget(params),
@@ -561,6 +588,8 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           setOpen={setOpen}
           openOverlayMode={toggleMode}
           clearOpenIntent={clearOpenIntent}
+          preserveFocusOnClose={preserveFocusOnClose}
+          shouldPreserveFocusOnClose={shouldPreserveFocusOnClose}
         />
       </CommandDialog>
     </ComposerHandleContext>
@@ -573,6 +602,8 @@ function CommandPaletteDialog(props: {
   readonly setOpen: (open: boolean) => void;
   readonly openOverlayMode: (mode: SearchOverlayMode) => void;
   readonly clearOpenIntent: () => void;
+  readonly preserveFocusOnClose: () => void;
+  readonly shouldPreserveFocusOnClose: () => boolean;
 }) {
   const composerHandleRef = useComposerHandleContext();
 
@@ -590,6 +621,9 @@ function CommandPaletteDialog(props: {
       data-palette-mode={props.mode}
       data-testid="command-palette"
       finalFocus={() => {
+        if (props.shouldPreserveFocusOnClose()) {
+          return false;
+        }
         composerHandleRef?.current?.focusAtEnd();
         return false;
       }}
@@ -607,6 +641,7 @@ function CommandPaletteDialog(props: {
           setOpen={props.setOpen}
           openOverlayMode={props.openOverlayMode}
           clearOpenIntent={props.clearOpenIntent}
+          preserveFocusOnClose={props.preserveFocusOnClose}
         />
       )}
     </CommandDialogPopup>
@@ -618,6 +653,7 @@ function OpenCommandPaletteDialog(props: {
   readonly setOpen: (open: boolean) => void;
   readonly openOverlayMode: (mode: SearchOverlayMode) => void;
   readonly clearOpenIntent: () => void;
+  readonly preserveFocusOnClose: () => void;
 }) {
   const navigate = useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
@@ -652,6 +688,7 @@ function OpenCommandPaletteDialog(props: {
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
+  const { confirmAndDeleteThread, forkThread } = useThreadActions();
   const projects = useProjects();
   const referenceThreadRef =
     pathname === "/pull-requests"
@@ -699,6 +736,28 @@ function OpenCommandPaletteDialog(props: {
       );
     }
   }, [activeThreadReferenceCopyTarget]);
+  const deleteActiveThread = useCallback(
+    async (threadRef: ScopedThreadRef) => {
+      const result = await confirmAndDeleteThread(threadRef);
+      if (
+        result._tag === "Failure" &&
+        !isAtomCommandInterrupted(result) &&
+        // A failure after the thread is gone is post-delete worktree cleanup;
+        // deleteThread already reports that separately.
+        readThreadShell(threadRef) !== null
+      ) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to delete thread",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
+    },
+    [confirmAndDeleteThread],
+  );
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -997,6 +1056,19 @@ function OpenCommandPaletteDialog(props: {
   );
 
   const activeThreadId = activeThread?.id;
+  const activeThreadProvider = activeThread
+    ? (providerEntryByEnvironmentAndInstanceId.get(
+        `${activeThread.environmentId}:${activeThread.session?.providerInstanceId ?? activeThread.modelSelection.instanceId}`,
+      ) ?? null)
+    : null;
+  const activeThreadEnvironment = activeThread
+    ? (environments.find(
+        (environment) => environment.environmentId === activeThread.environmentId,
+      ) ?? null)
+    : null;
+  const activeThreadForkSupported =
+    activeThreadProvider?.driverKind === "codex" &&
+    activeThreadEnvironment?.serverConfig?.environment.capabilities.threadForking === true;
   const currentProjectEnvironmentId =
     activeThread?.environmentId ?? activeDraftThread?.environmentId ?? null;
   const currentProjectId = activeThread?.projectId ?? activeDraftThread?.projectId ?? null;
@@ -1688,6 +1760,55 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
+  if (activeThread && activeThread.archivedAt === null) {
+    actionItems.push(
+      buildRenameThreadActionItem({
+        thread: activeThread,
+        icon: <PencilIcon className={ITEM_ICON_CLASS} />,
+        requestRename: requestThreadRename,
+      }),
+    );
+  }
+
+  if (
+    activeThread &&
+    shouldShowDesktopDeleteThreadAction({ isDesktop: isElectron, thread: activeThread })
+  ) {
+    actionItems.push(
+      buildDeleteThreadActionItem({
+        thread: activeThread,
+        icon: <Trash2Icon className={ITEM_ICON_CLASS} />,
+        deleteThread: deleteActiveThread,
+      }),
+    );
+  }
+
+  if (activeThread && activeThreadForkSupported) {
+    const activeThreadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
+    actionItems.push({
+      kind: "action",
+      value: "action:fork-thread",
+      searchTerms: ["fork thread", "branch chat", "duplicate conversation"],
+      title: "Fork current thread",
+      icon: <MessageSquareIcon className={ITEM_ICON_CLASS} />,
+      disabled: !readThreadCanFork(activeThreadRef),
+      shortcutCommand: "chat.fork",
+      run: async () => {
+        const result = await forkThread(activeThreadRef);
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to fork thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      },
+    });
+  }
+
   if (activeThreadReferenceCopyTarget !== null) {
     actionItems.push({
       kind: "action",
@@ -1744,6 +1865,19 @@ function OpenCommandPaletteDialog(props: {
       openOverlayMode("files");
     },
   });
+
+  const restartDesktop = window.desktopBridge?.restart;
+  if (restartDesktop) {
+    actionItems.push({
+      kind: "action",
+      value: "action:restart-desktop",
+      searchTerms: ["restart", "relaunch", "reload", "codex account", "sign in"],
+      title: "Restart T3 Code",
+      description: "Restarts the desktop app and interrupts active agent runs.",
+      icon: <RotateCcwIcon className={ITEM_ICON_CLASS} />,
+      run: restartDesktop,
+    });
+  }
 
   actionItems.push({
     kind: "action",
@@ -2371,6 +2505,12 @@ function OpenCommandPaletteDialog(props: {
     displayedGroups = relativePathNeedsActiveProject ? [] : browseGroups;
   }
 
+  const resolvedHighlightedItemValue = resolveCommandPaletteHighlightedItemValue({
+    groups: displayedGroups,
+    highlightedItemValue,
+    autoHighlight: !isBrowsing && !isRemoteProjectCloneFlow,
+  });
+
   const inputPlaceholder =
     remoteProjectInputPlaceholder(addProjectCloneFlow) ??
     getCommandPaletteInputPlaceholder(paletteMode);
@@ -2511,6 +2651,9 @@ function OpenCommandPaletteDialog(props: {
       return;
     }
 
+    if (!item.keepOpen && item.preserveFocusOnClose) {
+      props.preserveFocusOnClose();
+    }
     if (!item.keepOpen) {
       setOpen(false);
     }
@@ -2797,7 +2940,7 @@ function OpenCommandPaletteDialog(props: {
       ) : null}
       <CommandPaletteResults
         groups={displayedGroups}
-        highlightedItemValue={highlightedItemValue}
+        highlightedItemValue={resolvedHighlightedItemValue}
         isActionsOnly={isActionsOnly}
         keybindings={keybindings}
         onExecuteItem={executeItem}
