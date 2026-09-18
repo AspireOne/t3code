@@ -41,6 +41,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -1670,6 +1671,7 @@ const runCommand = Effect.fn("runCommand")(function* (
     readonly verbose: boolean;
   },
 ) {
+  const started = yield* Clock.currentTimeMillis;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const child = yield* commandSpawner.spawn(command);
   const [stdout, stderr, exitCode] = yield* Effect.all(
@@ -1679,6 +1681,11 @@ const runCommand = Effect.fn("runCommand")(function* (
       child.exitCode.pipe(Effect.map(Number)),
     ],
     { concurrency: "unbounded" },
+  );
+
+  const finished = yield* Clock.currentTimeMillis;
+  yield* Effect.log(
+    `[desktop-artifact] ${options.label}: ${((finished - started) / 1000).toFixed(1)}s (exit ${exitCode})`,
   );
 
   if (exitCode !== 0) {
@@ -2947,7 +2954,12 @@ export const stageWindowsServerSidecar = Effect.fn("stageWindowsServerSidecar")(
   }
 
   yield* Effect.log("[desktop-artifact] Installing server sidecar runtime externals...");
-  const installCommand = yield* resolveSpawnCommand("vp", [...STAGE_INSTALL_ARGS]);
+  const installCommand = yield* resolveSpawnCommand(
+    process.env.T3CODE_WINDOWS_BUILD_CACHE ? process.execPath : "vp",
+    process.env.T3CODE_WINDOWS_BUILD_CACHE
+      ? [path.join(input.repoRoot, "scripts/windows-build-cache.ts"), "dependencies"]
+      : [...STAGE_INSTALL_ARGS],
+  );
   yield* runCommand(
     ChildProcess.make(installCommand.command, installCommand.args, {
       cwd: serverStageDir,
@@ -3695,7 +3707,12 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   }
 
   yield* Effect.log("[desktop-artifact] Installing staged production dependencies...");
-  const installCommand = yield* resolveSpawnCommand("vp", [...STAGE_INSTALL_ARGS]);
+  const installCommand = yield* resolveSpawnCommand(
+    process.env.T3CODE_WINDOWS_BUILD_CACHE ? process.execPath : "vp",
+    process.env.T3CODE_WINDOWS_BUILD_CACHE
+      ? [path.join(repoRoot, "scripts/windows-build-cache.ts"), "dependencies"]
+      : [...STAGE_INSTALL_ARGS],
+  );
   yield* runCommand(
     ChildProcess.make(installCommand.command, installCommand.args, {
       cwd: stageAppDir,
