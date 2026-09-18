@@ -232,6 +232,17 @@ export class ClerkPasskeyNativePackageMissingError extends Schema.TaggedError<Cl
   }
 }
 
+export class FfiRsHostBindingPackageMissingError extends Schema.TaggedError<FfiRsHostBindingPackageMissingError>()(
+  "FfiRsHostBindingPackageMissingError",
+  {
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `Could not stage the host ffi-rs binding for the bundle self-containment probe: ${String(this.cause)}`;
+  }
+}
+
 export class UnsupportedHostBuildPlatformError extends Schema.TaggedError<UnsupportedHostBuildPlatformError>()(
   "UnsupportedHostBuildPlatformError",
   {
@@ -2912,10 +2923,35 @@ export const stageWindowsServerSidecar = Effect.fn("stageWindowsServerSidecar")(
   yield* fs.makeDirectory(path.join(serverStageDir, "apps/server"), { recursive: true });
   yield* fs.copy(input.serverDistDir, path.join(serverStageDir, "apps/server/dist"));
 
-  const sidecarDependencies = {
+  const sidecarDependencies: Record<string, string> = {
     ...input.runtimeExternalDependencies,
     ...resolveFffNativeDependencies("win", input.arch, input.fffNodeVersion),
   };
+  if (process.platform === "linux" && process.arch === "x64") {
+    // The bundle self-containment probe runs the sidecar's module graph with
+    // the build host's Node. Cross-building this Windows artifact from WSL or
+    // another Linux host makes ffi-rs host-detect Linux and require its
+    // glibc-x64 binding, which the Win32-only stage never installs. Stage it
+    // as a mandatory root so pnpm's supported-architectures filter cannot
+    // skip it, mirroring the cross-platform node-pty prebuilds the sidecar
+    // already ships. On a Windows build host the binding is never added, so
+    // those payloads stay byte-identical to the upstream closure.
+    const ffiRsPackageDir = yield* findStorePackageDirectory(input.repoRoot, "ffi-rs");
+    if (ffiRsPackageDir === null) {
+      return yield* new FfiRsHostBindingPackageMissingError({
+        cause: `ffi-rs was not found under ${path.join(input.repoRoot, "node_modules/.pnpm")}`,
+      });
+    }
+    const ffiRsManifest = JSON.parse(
+      yield* fs.readFileString(path.join(ffiRsPackageDir, "package.json")),
+    ) as { version?: unknown };
+    if (typeof ffiRsManifest.version !== "string" || ffiRsManifest.version.length === 0) {
+      return yield* new FfiRsHostBindingPackageMissingError({
+        cause: `ffi-rs manifest at ${ffiRsPackageDir} has no version`,
+      });
+    }
+    sidecarDependencies["@yuuang/ffi-rs-linux-x64-gnu"] = ffiRsManifest.version;
+  }
   const sidecarPatchedDependencies = createStagePatchedDependencies(
     input.patchedDependencies,
     sidecarDependencies,
