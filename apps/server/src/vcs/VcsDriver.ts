@@ -17,6 +17,7 @@ import * as VcsProcess from "./VcsProcess.ts";
 export interface VcsCaptureCheckpointInput {
   readonly cwd: string;
   readonly checkpointRef: CheckpointRef;
+  readonly turnBaselineCheckpointRef?: CheckpointRef | null;
 }
 
 export interface VcsRestoreCheckpointInput {
@@ -32,11 +33,18 @@ export interface VcsDiffCheckpointsInput {
   readonly fallbackFromToHead?: boolean;
   readonly ignoreWhitespace: boolean;
   readonly format?: "patch" | "numstat";
+  readonly useTurnBaseline?: boolean;
 }
 
 export interface VcsDeleteCheckpointRefsInput {
   readonly cwd: string;
   readonly checkpointRefs: ReadonlyArray<CheckpointRef>;
+}
+
+export interface VcsCopyCheckpointRefInput {
+  readonly cwd: string;
+  readonly sourceCheckpointRef: CheckpointRef;
+  readonly targetCheckpointRef: CheckpointRef;
 }
 
 export interface VcsCheckpointOps {
@@ -48,6 +56,9 @@ export interface VcsCheckpointOps {
     input: VcsRestoreCheckpointInput,
   ) => Effect.Effect<boolean, VcsError>;
   readonly diffCheckpoints: (input: VcsDiffCheckpointsInput) => Effect.Effect<string, VcsError>;
+  readonly copyCheckpointRef?: (
+    input: VcsCopyCheckpointRefInput,
+  ) => Effect.Effect<boolean, VcsError>;
   readonly deleteCheckpointRefs: (
     input: VcsDeleteCheckpointRefsInput,
   ) => Effect.Effect<void, VcsError>;

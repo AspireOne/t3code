@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { parseTurnDiffFilesFromNumstat } from "./Diffs.ts";
+import { parseGitNumstat } from "./gitDiff.ts";
 
-describe("parseTurnDiffFilesFromNumstat", () => {
+describe("parseGitNumstat", () => {
   it("returns an empty list when no files changed", () => {
-    expect(parseTurnDiffFilesFromNumstat("")).toEqual([]);
+    expect(parseGitNumstat("")).toEqual([]);
   });
 
   it("sorts files and preserves addition and deletion counts", () => {
     const numstat = ["0\t2\tsrc/b.ts", "2\t1\ta.txt", ""].join("\0");
-    expect(parseTurnDiffFilesFromNumstat(numstat)).toEqual([
+    expect(parseGitNumstat(numstat)).toEqual([
       { path: "a.txt", additions: 2, deletions: 1 },
       { path: "src/b.ts", additions: 0, deletions: 2 },
     ]);
@@ -27,7 +27,7 @@ describe("parseTurnDiffFilesFromNumstat", () => {
       "",
     ].join("\0");
 
-    expect(parseTurnDiffFilesFromNumstat(numstat)).toEqual([
+    expect(parseGitNumstat(numstat)).toEqual([
       { path: "other.ts", additions: 1, deletions: 0 },
       { path: "src/copied.ts", additions: 2, deletions: 1 },
       { path: "src/new.ts", additions: 0, deletions: 0 },
@@ -36,7 +36,7 @@ describe("parseTurnDiffFilesFromNumstat", () => {
 
   it("keeps binary files and empty files with zero line changes", () => {
     const numstat = ["-\t-\timage.png", "0\t0\tempty.txt", ""].join("\0");
-    expect(parseTurnDiffFilesFromNumstat(numstat)).toEqual([
+    expect(parseGitNumstat(numstat)).toEqual([
       { path: "empty.txt", additions: 0, deletions: 0 },
       { path: "image.png", additions: 0, deletions: 0 },
     ]);
@@ -46,9 +46,7 @@ describe("parseTurnDiffFilesFromNumstat", () => {
     const path = " café\tline\r\nname.txt ";
     const numstat = `3\t2\t\0old\tname\n.txt\0${path}\0`;
 
-    expect(parseTurnDiffFilesFromNumstat(numstat)).toEqual([{ path, additions: 3, deletions: 2 }]);
-    expect(parseTurnDiffFilesFromNumstat(`1\t0\t${path}\0`)).toEqual([
-      { path, additions: 1, deletions: 0 },
-    ]);
+    expect(parseGitNumstat(numstat)).toEqual([{ path, additions: 3, deletions: 2 }]);
+    expect(parseGitNumstat(`1\t0\t${path}\0`)).toEqual([{ path, additions: 1, deletions: 0 }]);
   });
 });

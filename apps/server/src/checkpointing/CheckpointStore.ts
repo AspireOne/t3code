@@ -25,6 +25,8 @@ import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 export interface CaptureCheckpointInput {
   readonly cwd: string;
   readonly checkpointRef: CheckpointRef;
+  /** Undefined for legacy snapshots; null when turn attribution is unavailable. */
+  readonly turnBaselineCheckpointRef?: CheckpointRef | null;
 }
 
 export interface RestoreCheckpointInput {
@@ -40,11 +42,18 @@ export interface DiffCheckpointsInput {
   readonly fallbackFromToHead?: boolean;
   readonly ignoreWhitespace: boolean;
   readonly format?: "patch" | "numstat";
+  readonly useTurnBaseline?: boolean;
 }
 
 export interface DeleteCheckpointRefsInput {
   readonly cwd: string;
   readonly checkpointRefs: ReadonlyArray<CheckpointRef>;
+}
+
+export interface CopyCheckpointRefInput {
+  readonly cwd: string;
+  readonly sourceCheckpointRef: CheckpointRef;
+  readonly targetCheckpointRef: CheckpointRef;
 }
 
 /** Service tag for checkpoint persistence and restore operations. */
@@ -86,6 +95,10 @@ export class CheckpointStore extends Context.Service<
     readonly diffCheckpoints: (
       input: DiffCheckpointsInput,
     ) => Effect.Effect<string, CheckpointStoreError>;
+
+    readonly copyCheckpointRef?: (
+      input: CopyCheckpointRefInput,
+    ) => Effect.Effect<boolean, CheckpointStoreError>;
 
     /**
      * Delete the provided checkpoint refs.
@@ -160,12 +173,21 @@ export const make = Effect.gen(function* () {
     return yield* checkpoints.deleteCheckpointRefs(input);
   });
 
+  const copyCheckpointRef: NonNullable<CheckpointStore["Service"]["copyCheckpointRef"]> = Effect.fn(
+    "copyCheckpointRef",
+  )(function* (input) {
+    const checkpoints = yield* resolveCheckpoints("CheckpointStore.copyCheckpointRef", input.cwd);
+    if (checkpoints.copyCheckpointRef === undefined) return false;
+    return yield* checkpoints.copyCheckpointRef(input);
+  });
+
   return CheckpointStore.of({
     isGitRepository,
     captureCheckpoint,
     hasCheckpointRef,
     restoreCheckpoint,
     diffCheckpoints,
+    copyCheckpointRef,
     deleteCheckpointRefs,
   });
 });

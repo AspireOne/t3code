@@ -16,6 +16,7 @@ import {
   VcsProcessStdinWriteError,
   VcsProcessTimeoutError,
 } from "@t3tools/contracts";
+import { GIT_DIFF_TRUNCATION_MARKER } from "@t3tools/shared/git";
 import * as ProcessRunner from "../processRunner.ts";
 
 export interface VcsProcessInput {
@@ -53,7 +54,7 @@ export class VcsProcess extends Context.Service<
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
-const OUTPUT_TRUNCATED_MARKER = "\n\n[truncated]";
+const OUTPUT_TRUNCATED_MARKER = GIT_DIFF_TRUNCATION_MARKER;
 const VCS_PROCESS_CONCURRENCY = 8;
 const GITHUB_PROCESS_CONCURRENCY = 4;
 

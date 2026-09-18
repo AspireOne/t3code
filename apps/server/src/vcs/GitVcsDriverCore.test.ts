@@ -323,7 +323,18 @@ it.effect("uses stable diagnostics for every parsed non-repository command", () 
 
     assert.deepStrictEqual(commands, [
       { args: ["rev-parse", "--git-path", "index"], lcAll: "C" },
-      { args: ["status", "--porcelain=2", "--branch"], lcAll: "C" },
+      {
+        args: [
+          "-c",
+          "status.relativePaths=false",
+          "status",
+          "--porcelain=2",
+          "--branch",
+          "--untracked-files=all",
+          "-z",
+        ],
+        lcAll: "C",
+      },
       { args: ["rev-parse", "--abbrev-ref", "HEAD"], lcAll: "C" },
       { args: ["rev-parse", "--git-common-dir"], lcAll: "C" },
     ]);
@@ -799,6 +810,66 @@ it.effect("backs off failed upstream refreshes across linked worktrees", () =>
   ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 
+it.effect("allows background upstream fetches to take longer than five seconds", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fetchStarted = yield* Deferred.make<void>();
+      const fetchCompleted = yield* Ref.make(false);
+      const slowFetchSpawner = ChildProcessSpawner.make((command) =>
+        Effect.gen(function* () {
+          if (!ChildProcess.isStandardCommand(command)) {
+            return yield* Effect.die("expected a standard Git command");
+          }
+          if (command.args.includes("fetch") && command.args.includes("--quiet")) {
+            yield* Deferred.succeed(fetchStarted, undefined);
+            return ChildProcessSpawner.makeHandle({
+              ...makeSuccessfulHandle(""),
+              exitCode: Effect.sleep("6 seconds").pipe(
+                Effect.tap(() => Ref.set(fetchCompleted, true)),
+                Effect.as(ChildProcessSpawner.ExitCode(0)),
+              ),
+            });
+          }
+          return yield* delegate.spawn(command);
+        }),
+      );
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, slowFetchSpawner),
+      );
+      const cwd = yield* makeTmpDir();
+      const remote = yield* makeTmpDir("git-vcs-driver-remote-");
+      const runGit = (args: ReadonlyArray<string>) =>
+        driver.execute({
+          operation: "GitVcsDriver.test.slowUpstreamRefresh",
+          cwd,
+          args,
+          timeoutMs: 10_000,
+        });
+
+      yield* driver.initRepo({ cwd });
+      yield* runGit(["config", "user.email", "test@test.com"]);
+      yield* runGit(["config", "user.name", "Test"]);
+      yield* writeTextFile(cwd, "README.md", "# test\n");
+      yield* runGit(["add", "."]);
+      yield* runGit(["commit", "-m", "initial commit"]);
+      const initialBranch = (yield* runGit(["branch", "--show-current"])).stdout.trim();
+      yield* runGit(["remote", "add", "origin", remote]);
+      yield* runGit(["update-ref", `refs/remotes/origin/${initialBranch}`, "HEAD"]);
+      yield* runGit(["branch", "--set-upstream-to", `origin/${initialBranch}`]);
+
+      const statusFiber = yield* driver
+        .statusDetailsRemote(cwd)
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(fetchStarted);
+      yield* TestClock.adjust("6 seconds");
+      yield* Fiber.join(statusFiber);
+
+      assert.isTrue(yield* Ref.get(fetchCompleted));
+    }),
+  ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
 it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
   describe("process environment", () => {
     it.effect("preserves the caller locale for general Git subprocesses", () =>
@@ -1154,6 +1225,52 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("shows staged, unstaged, and untracked files before the first commit", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* driver.initRepo({ cwd });
+        yield* writeTextFile(cwd, "initial.ts", "staged\n");
+        yield* git(cwd, ["add", "initial.ts"]);
+        yield* writeTextFile(cwd, "initial.ts", "staged\nunstaged\n");
+        yield* writeTextFile(cwd, "untracked.ts", "untracked\n");
+
+        const preview = yield* driver.getReviewDiffPreview({
+          cwd,
+          ignoreWhitespace: false,
+        });
+        const workingTree = preview.sources.find((source) => source.kind === "working-tree")?.diff;
+
+        assert.include(workingTree, "diff --git a/initial.ts b/initial.ts");
+        assert.include(workingTree, "+staged");
+        assert.include(workingTree, "+unstaged");
+        assert.include(workingTree, "diff --git a/untracked.ts b/untracked.ts");
+        assert.equal(workingTree?.match(/diff --git a\/initial\.ts b\/initial\.ts/g)?.length, 1);
+      }),
+    );
+
+    it.effect("reports an invalid review base instead of returning an empty branch diff", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const error = yield* driver
+          .getReviewDiffPreview({
+            cwd,
+            baseRef: "missing-review-base",
+            ignoreWhitespace: false,
+          })
+          .pipe(Effect.flip);
+
+        assert.deepInclude(error, {
+          _tag: "GitCommandError",
+          operation: "GitVcsDriver.getReviewDiffPreview.base",
+          detail: "Git command exited with a non-zero status.",
+        });
+      }),
+    );
+
     it.effect("keeps untracked files visible before the first commit", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
@@ -1272,6 +1389,90 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
   });
 
   describe("repository status", () => {
+    it.effect("reports exact paths once for spaced filenames and directory renames", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        yield* writeTextFile(cwd, "notes with spaces.txt", "before\n");
+        yield* writeTextFile(cwd, "src/old name.txt", "rename\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "filename fixtures"]);
+        yield* writeTextFile(cwd, "notes with spaces.txt", "after\n");
+        yield* git(cwd, ["mv", "src/old name.txt", "src/new name.txt"]);
+        const status = yield* (yield* GitVcsDriver.GitVcsDriver).statusDetailsLocal(cwd);
+        assert.deepStrictEqual(status.workingTree.files, [
+          { path: "notes with spaces.txt", insertions: 1, deletions: 1 },
+          { path: "src/new name.txt", insertions: 0, deletions: 0 },
+        ]);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        // A recreated source is a separate untracked file, excluded from this commit.
+        yield* writeTextFile(cwd, "src/old name.txt", "new untracked content\n");
+        yield* driver.prepareCommitContext(cwd, ["src/new name.txt"]);
+        assert.equal(
+          yield* git(cwd, ["diff", "--cached", "--name-status"]),
+          "R100\tsrc/old name.txt\tsrc/new name.txt",
+        );
+        assert.equal(
+          yield* git(cwd, ["ls-files", "--others", "--exclude-standard"]),
+          "src/old name.txt",
+        );
+      }),
+    );
+
+    it.effect("uses repository paths for nested status and selective staging", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        yield* writeTextFile(cwd, "app/main.ts", "before\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "nested fixture"]);
+        yield* writeTextFile(cwd, "app/main.ts", "after\n");
+        yield* writeTextFile(cwd, "README.md", "other edit\n");
+        const path = yield* Path.Path;
+        const nested = path.join(cwd, "app");
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const status = yield* driver.statusDetailsLocal(nested);
+        assert.deepStrictEqual(
+          status.workingTree.files.map((file) => file.path),
+          ["app/main.ts", "README.md"],
+        );
+        yield* driver.prepareCommitContext(nested, ["app/main.ts"]);
+        assert.equal(yield* git(cwd, ["diff", "--cached", "--name-only"]), "app/main.ts");
+      }),
+    );
+
+    it.effect("preserves Unicode, tabs, newlines, and surrounding spaces in paths", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const names =
+          (yield* HostProcessPlatform) === "win32"
+            ? ["žluťoučký.txt"]
+            : [
+                "žluťoučký.txt",
+                "a => b.txt",
+                "tabs\there.txt",
+                "line\nbreak.txt",
+                " leading and trailing ",
+              ];
+        for (const name of names) yield* writeTextFile(cwd, name, "before\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "unusual filename fixtures"]);
+        for (const name of names) yield* writeTextFile(cwd, name, "after\n");
+        yield* writeTextFile(cwd, "untracked folder/one.txt", "new\n");
+        yield* writeTextFile(cwd, "untracked folder/two.txt", "new\n");
+        const status = yield* (yield* GitVcsDriver.GitVcsDriver).statusDetailsLocal(cwd);
+        assert.deepStrictEqual(
+          status.workingTree.files.map((file) => file.path),
+          [...names, "untracked folder/one.txt", "untracked folder/two.txt"].sort((a, b) =>
+            a.localeCompare(b),
+          ),
+        );
+        assert.equal(status.workingTree.insertions, names.length);
+        assert.equal(status.workingTree.deletions, names.length);
+      }),
+    );
+
     it.effect("reports non-repository directories without failing", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
@@ -1298,6 +1499,72 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           status.workingTree.files.map((file) => file.path),
           "feature.ts",
         );
+      }),
+    );
+
+    it.effect("counts staged, unstaged, and untracked status entries", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        yield* writeTextFile(cwd, "tracked.ts", "export const value = 1;\n");
+        yield* writeTextFile(cwd, "deleted.ts", "delete me\n");
+        yield* writeTextFile(cwd, "renamed.ts", "rename me\n");
+        yield* git(cwd, ["add", "tracked.ts", "deleted.ts", "renamed.ts"]);
+        yield* git(cwd, ["commit", "-m", "add tracked files"]);
+
+        yield* writeTextFile(cwd, "tracked.ts", "export const value = 2;\n");
+        yield* git(cwd, ["add", "tracked.ts"]);
+        yield* writeTextFile(cwd, "tracked.ts", "export const value = 3;\n");
+        yield* writeTextFile(cwd, "README.md", "# changed\n");
+        yield* git(cwd, ["rm", "deleted.ts"]);
+        yield* git(cwd, ["reset", "HEAD", "deleted.ts"]);
+        yield* git(cwd, ["mv", "renamed.ts", "renamed-next.ts"]);
+        yield* writeTextFile(cwd, "untracked.txt", "new\n");
+
+        const status = yield* (yield* GitVcsDriver.GitVcsDriver).statusDetails(cwd);
+
+        assert.deepStrictEqual(status.changeCounts, {
+          conflicted: 0,
+          staged: 2,
+          unstaged: 3,
+          deleted: 1,
+          renamed: 1,
+          untracked: 1,
+        });
+      }),
+    );
+
+    it.effect("counts unresolved paths only as conflicts", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        yield* git(cwd, ["checkout", "-b", "conflicting-branch"]);
+        yield* writeTextFile(cwd, "README.md", "branch version\n");
+        yield* git(cwd, ["add", "README.md"]);
+        yield* git(cwd, ["commit", "-m", "change on branch"]);
+        yield* git(cwd, ["checkout", initialBranch]);
+        yield* writeTextFile(cwd, "README.md", "main version\n");
+        yield* git(cwd, ["add", "README.md"]);
+        yield* git(cwd, ["commit", "-m", "change on main"]);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const merge = yield* driver.execute({
+          operation: "GitVcsDriver.test.conflictingMerge",
+          cwd,
+          args: ["merge", "conflicting-branch"],
+          allowNonZeroExit: true,
+        });
+        assert.notEqual(merge.exitCode, 0);
+
+        const status = yield* driver.statusDetails(cwd);
+
+        assert.deepStrictEqual(status.changeCounts, {
+          conflicted: 1,
+          staged: 0,
+          unstaged: 0,
+          deleted: 0,
+          renamed: 0,
+          untracked: 0,
+        });
       }),
     );
 

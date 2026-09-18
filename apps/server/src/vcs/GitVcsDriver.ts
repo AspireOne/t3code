@@ -73,6 +73,7 @@ export interface GitStatusDetails {
   branch: string | null;
   upstreamRef: string | null;
   hasWorkingTreeChanges: boolean;
+  changeCounts: NonNullable<VcsStatusResult["changeCounts"]>;
   workingTree: VcsStatusResult["workingTree"];
   hasUpstream: boolean;
   aheadCount: number;
@@ -380,6 +381,10 @@ export class GitVcsDriver extends Context.Service<
 const WORKSPACE_FILES_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const GIT_CHECK_IGNORE_MAX_STDIN_BYTES = 256 * 1024;
 const CHECKPOINT_DIFF_MAX_OUTPUT_BYTES = 10_000_000;
+// Completion commits retain their starting tree as a parent, so copying or
+// deleting checkpoint refs cannot detach the baseline from its turn.
+const TURN_BASELINE_AVAILABLE = "T3-Turn-Baseline: available";
+const TURN_BASELINE_UNAVAILABLE = "T3-Turn-Baseline: unavailable";
 const WORKSPACE_GIT_HARDENED_CONFIG_ARGS = [
   "-c",
   "core.fsmonitor=false",
@@ -771,46 +776,56 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         .pipe(Effect.ignore);
 
       yield* Effect.gen(function* () {
-        const headExists = yield* hasHeadCommit(input.cwd);
-        if (headExists) {
-          const reusedIndex = yield* Effect.gen(function* () {
-            const indexPath = yield* execute({
-              operation,
-              cwd: input.cwd,
-              args: ["rev-parse", "--path-format=absolute", "--git-path", "index"],
-            });
-            const { mtime } = yield* fileSystem.stat(indexPath.stdout.trim());
-            if (Option.isNone(mtime)) return false;
-            // Stay below the source timestamp even if Date rounded up, preserving Git's racy check.
-            const indexTime = Math.floor((mtime.value.getTime() - 1) / 1000);
-            if (indexTime <= 0) return false;
-            yield* fileSystem.copyFile(indexPath.stdout.trim(), tempIndexPath);
-            // Retain stat data only where the copied index already matches HEAD.
-            yield* execute({
-              operation,
-              cwd: input.cwd,
-              args: ["-c", "core.fsmonitor=false", "read-tree", "--reset", "HEAD"],
-              env: commitEnv,
-            });
-            // read-tree can rewrite the index, so restore its racy timestamp afterward.
-            yield* fileSystem.utimes(tempIndexPath, indexTime, indexTime);
-            const entries = yield* execute({
-              operation,
-              cwd: input.cwd,
-              args: ["ls-files", "-v"],
-              env: commitEnv,
-              maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
-            });
-            // A fresh index must still capture assume-unchanged/skip-worktree files.
-            return !entries.stdoutTruncated && !/^[a-zS] /m.test(entries.stdout);
-          }).pipe(Effect.orElseSucceed(() => false));
-          if (!reusedIndex) {
-            yield* execute({
-              operation,
-              cwd: input.cwd,
-              args: ["read-tree", "HEAD"],
-              env: commitEnv,
-            });
+        const baseline = input.turnBaselineCheckpointRef;
+        if (baseline !== null) {
+          yield* execute({
+            operation,
+            cwd: input.cwd,
+            args: ["read-tree", baseline],
+            env: commitEnv,
+          });
+        } else {
+          const headExists = yield* hasHeadCommit(input.cwd);
+          if (headExists) {
+            const reusedIndex = yield* Effect.gen(function* () {
+              const indexPath = yield* execute({
+                operation,
+                cwd: input.cwd,
+                args: ["rev-parse", "--path-format=absolute", "--git-path", "index"],
+              });
+              const { mtime } = yield* fileSystem.stat(indexPath.stdout.trim());
+              if (Option.isNone(mtime)) return false;
+              // Stay below the source timestamp even if Date rounded up, preserving Git's racy check.
+              const indexTime = Math.floor((mtime.value.getTime() - 1) / 1000);
+              if (indexTime <= 0) return false;
+              yield* fileSystem.copyFile(indexPath.stdout.trim(), tempIndexPath);
+              // Retain stat data only where the copied index already matches HEAD.
+              yield* execute({
+                operation,
+                cwd: input.cwd,
+                args: ["-c", "core.fsmonitor=false", "read-tree", "--reset", "HEAD"],
+                env: commitEnv,
+              });
+              // read-tree can rewrite the index, so restore its racy timestamp afterward.
+              yield* fileSystem.utimes(tempIndexPath, indexTime, indexTime);
+              const entries = yield* execute({
+                operation,
+                cwd: input.cwd,
+                args: ["ls-files", "-v"],
+                env: commitEnv,
+                maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
+              });
+              // A fresh index must still capture assume-unchanged/skip-worktree files.
+              return !entries.stdoutTruncated && !/^[a-zS] /m.test(entries.stdout);
+            }).pipe(Effect.orElseSucceed(() => false));
+            if (!reusedIndex) {
+              yield* execute({
+                operation,
+                cwd: input.cwd,
+                args: ["read-tree", "HEAD"],
+                env: commitEnv,
+              });
+            }
           }
         }
 
@@ -842,7 +857,16 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         const commitTreeResult = yield* execute({
           operation,
           cwd: input.cwd,
-          args: ["commit-tree", treeOid, "-m", message],
+          args: [
+            "commit-tree",
+            treeOid,
+            "-m",
+            message,
+            ...(baseline === undefined
+              ? []
+              : ["-m", baseline === null ? TURN_BASELINE_UNAVAILABLE : TURN_BASELINE_AVAILABLE]),
+            ...(baseline ? ["-p", baseline] : []),
+          ],
           env: commitEnv,
         });
         const commitOid = commitTreeResult.stdout.trim();
@@ -868,6 +892,17 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       resolveCheckpointCommit(input.cwd, input.checkpointRef).pipe(
         Effect.map((commit) => commit !== null),
       ),
+
+    copyCheckpointRef: Effect.fn("GitVcsDriver.checkpoints.copyCheckpointRef")(function* (input) {
+      const commitOid = yield* resolveCheckpointCommit(input.cwd, input.sourceCheckpointRef);
+      if (commitOid === null) return false;
+      yield* execute({
+        operation: "GitVcsDriver.checkpoints.copyCheckpointRef",
+        cwd: input.cwd,
+        args: ["update-ref", input.targetCheckpointRef, commitOid],
+      });
+      return true;
+    }),
 
     restoreCheckpoint: Effect.fn("GitVcsDriver.checkpoints.restoreCheckpoint")(function* (input) {
       const operation = "GitVcsDriver.checkpoints.restoreCheckpoint";
@@ -957,7 +992,28 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       });
 
       let fromRevision: string = input.fromCheckpointRef;
-      if (input.fallbackFromToHead === true) {
+      if (input.useTurnBaseline) {
+        const metadata = yield* execute({
+          operation,
+          cwd: input.cwd,
+          args: ["show", "--no-patch", "--format=%P%n%B", `${input.toCheckpointRef}^{commit}`],
+        });
+        const [parents = "", ...message] = metadata.stdout.split("\n");
+        if (message.includes(TURN_BASELINE_UNAVAILABLE)) {
+          return yield* new VcsProcessExitError({
+            operation,
+            command: "git diff",
+            cwd: input.cwd,
+            exitCode: 1,
+            detail:
+              "Turn diff unavailable: its starting snapshot is missing or another turn overlapped this workspace.",
+          });
+        }
+        if (message.includes(TURN_BASELINE_AVAILABLE)) {
+          fromRevision = parents.split(" ")[0]!;
+        }
+      }
+      if (input.fallbackFromToHead === true && fromRevision === input.fromCheckpointRef) {
         const resolvedFromCommit = yield* resolveCheckpointCommit(
           input.cwd,
           input.fromCheckpointRef,
@@ -996,6 +1052,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         allowNonZeroExit: true,
         maxOutputBytes: CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
         outputMode: input.format === "numstat" ? "error" : "truncate",
+        appendTruncationMarker: input.format !== "numstat",
       });
 
       if (result.exitCode !== 0) {

@@ -172,6 +172,7 @@ export const make = Effect.gen(function* () {
           toCheckpointRef,
           fallbackFromToHead: false,
           ignoreWhitespace,
+          useTurnBaseline: input.toTurnCount === input.fromTurnCount + 1,
         })
         .pipe(Effect.withSpan("checkpoint.turnDiff.diffCheckpoints"));
 
@@ -216,6 +217,10 @@ export const make = Effect.gen(function* () {
         });
       }
       return emptyDiff satisfies OrchestrationGetFullThreadDiffResult;
+    }
+
+    if (input.toTurnCount === 1) {
+      return yield* getTurnDiff({ ...input, fromTurnCount: 0 });
     }
 
     const threadContext = yield* projectionSnapshotQuery

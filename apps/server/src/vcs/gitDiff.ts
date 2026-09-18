@@ -1,13 +1,13 @@
-export interface TurnDiffFileSummary {
+export interface GitNumstatEntry {
   readonly path: string;
   readonly additions: number;
   readonly deletions: number;
 }
 
 /** Reads Git's NUL-delimited numstat output without decoding display paths. */
-export function parseTurnDiffFilesFromNumstat(numstat: string): ReadonlyArray<TurnDiffFileSummary> {
+export function parseGitNumstat(numstat: string): ReadonlyArray<GitNumstatEntry> {
   const records = numstat.split("\0");
-  const files: TurnDiffFileSummary[] = [];
+  const files: GitNumstatEntry[] = [];
 
   for (let index = 0; index < records.length; index += 1) {
     const record = records[index]!;

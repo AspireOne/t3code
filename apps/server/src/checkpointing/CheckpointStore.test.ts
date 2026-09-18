@@ -13,7 +13,7 @@ import * as Scope from "effect/Scope";
 import { describe, expect } from "vite-plus/test";
 
 import { checkpointRefForThreadTurn } from "./Utils.ts";
-import { parseTurnDiffFilesFromNumstat } from "./Diffs.ts";
+import { parseGitNumstat } from "../vcs/gitDiff.ts";
 import * as CheckpointStore from "./CheckpointStore.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
@@ -117,6 +117,161 @@ it.layer(TestLayer)("CheckpointStore.layer", (it) => {
   });
 
   describe("diffCheckpoints", () => {
+    it.effect(
+      "keeps a turn's starting snapshot independent of the previous restore checkpoint",
+      () =>
+        Effect.gen(function* () {
+          const cwd = yield* makeTmpDir();
+          yield* initRepoWithCommit(cwd);
+          const store = yield* CheckpointStore.CheckpointStore;
+          const threadId = ThreadId.make("separate-turn-baseline");
+          const previous = checkpointRefForThreadTurn(threadId, 1);
+          const baseline = checkpointRefForThreadTurn(threadId, 99);
+          const completed = checkpointRefForThreadTurn(threadId, 2);
+          yield* store.captureCheckpoint({ cwd, checkpointRef: previous });
+          yield* writeTextFile(NodePath.join(cwd, "manual.txt"), "between turns\n");
+          yield* store.captureCheckpoint({ cwd, checkpointRef: baseline });
+          yield* writeTextFile(NodePath.join(cwd, "README.md"), "agent edit\n");
+          yield* store.captureCheckpoint({
+            cwd,
+            checkpointRef: completed,
+            turnBaselineCheckpointRef: baseline,
+          });
+          // The ending checkpoint owns its baseline even after temporary refs are removed.
+          yield* store.deleteCheckpointRefs({ cwd, checkpointRefs: [baseline] });
+          const input = {
+            cwd,
+            fromCheckpointRef: previous,
+            toCheckpointRef: completed,
+            ignoreWhitespace: false,
+            useTurnBaseline: true,
+          };
+          const patch = yield* store.diffCheckpoints(input);
+          expect(patch).toContain("+agent edit");
+          expect(patch).not.toContain("manual.txt");
+          expect(
+            parseGitNumstat(yield* store.diffCheckpoints({ ...input, format: "numstat" })),
+          ).toEqual([{ path: "README.md", additions: 1, deletions: 1 }]);
+          expect(yield* git(cwd, ["show", `${previous}:README.md`])).toBe("# test");
+          expect(yield* store.diffCheckpoints({ ...input, useTurnBaseline: false })).toContain(
+            "manual.txt",
+          );
+        }),
+    );
+
+    it.effect("reports unavailable attribution instead of inventing a turn baseline", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const store = yield* CheckpointStore.CheckpointStore;
+        const threadId = ThreadId.make("unavailable-turn-baseline");
+        const previous = checkpointRefForThreadTurn(threadId, 0);
+        const completed = checkpointRefForThreadTurn(threadId, 1);
+        yield* store.captureCheckpoint({ cwd, checkpointRef: previous });
+        yield* writeTextFile(NodePath.join(cwd, "README.md"), "unattributed edit\n");
+        yield* store.captureCheckpoint({
+          cwd,
+          checkpointRef: completed,
+          turnBaselineCheckpointRef: null,
+        });
+        const result = yield* store
+          .diffCheckpoints({
+            cwd,
+            fromCheckpointRef: previous,
+            toCheckpointRef: completed,
+            ignoreWhitespace: false,
+            useTurnBaseline: true,
+          })
+          .pipe(Effect.result);
+        expect(result).toMatchObject({
+          _tag: "Failure",
+          failure: { detail: expect.stringContaining("Turn diff unavailable") },
+        });
+        expect(yield* store.restoreCheckpoint({ cwd, checkpointRef: completed })).toBe(true);
+      }),
+    );
+
+    it.effect("keeps present baseline files when a turn starts ignoring them", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const store = yield* CheckpointStore.CheckpointStore;
+        const threadId = ThreadId.make("new-ignore-rule");
+        const baseline = checkpointRefForThreadTurn(threadId, 99);
+        const completed = checkpointRefForThreadTurn(threadId, 1);
+        yield* writeTextFile(NodePath.join(cwd, "retained.log"), "still present\n");
+        yield* writeTextFile(NodePath.join(cwd, "removed.log"), "deleted during turn\n");
+        yield* store.captureCheckpoint({ cwd, checkpointRef: baseline });
+
+        yield* writeTextFile(NodePath.join(cwd, ".gitignore"), "*.log\n");
+        yield* (yield* FileSystem.FileSystem).remove(NodePath.join(cwd, "removed.log"));
+        yield* store.captureCheckpoint({
+          cwd,
+          checkpointRef: completed,
+          turnBaselineCheckpointRef: baseline,
+        });
+
+        expect(
+          parseGitNumstat(
+            yield* store.diffCheckpoints({
+              cwd,
+              fromCheckpointRef: baseline,
+              toCheckpointRef: completed,
+              ignoreWhitespace: false,
+              format: "numstat",
+              useTurnBaseline: true,
+            }),
+          ),
+        ).toEqual([
+          { path: ".gitignore", additions: 1, deletions: 0 },
+          { path: "removed.log", additions: 0, deletions: 1 },
+        ]);
+        expect(yield* git(cwd, ["show", `${completed}:retained.log`])).toBe("still present");
+      }),
+    );
+
+    it.effect("keeps nested turn checkpoints isolated from committed sibling changes", () =>
+      Effect.gen(function* () {
+        const root = yield* makeTmpDir();
+        yield* initRepoWithCommit(root);
+        const cwd = NodePath.join(root, "app");
+        yield* (yield* FileSystem.FileSystem).makeDirectory(cwd);
+        yield* writeTextFile(NodePath.join(cwd, "main.ts"), "baseline\n");
+        yield* writeTextFile(NodePath.join(root, "sibling.txt"), "baseline\n");
+        yield* git(root, ["add", "."]);
+        yield* git(root, ["commit", "-m", "add workspaces"]);
+        const store = yield* CheckpointStore.CheckpointStore;
+        const threadId = ThreadId.make("nested-turn-scope");
+        const baseline = checkpointRefForThreadTurn(threadId, 99);
+        const completed = checkpointRefForThreadTurn(threadId, 1);
+        yield* store.captureCheckpoint({ cwd, checkpointRef: baseline });
+
+        yield* writeTextFile(NodePath.join(root, "sibling.txt"), "committed sibling change\n");
+        yield* git(root, ["add", "sibling.txt"]);
+        yield* git(root, ["commit", "-m", "change sibling"]);
+        yield* writeTextFile(NodePath.join(cwd, "main.ts"), "turn change\n");
+        yield* store.captureCheckpoint({
+          cwd,
+          checkpointRef: completed,
+          turnBaselineCheckpointRef: baseline,
+        });
+
+        expect(
+          parseGitNumstat(
+            yield* store.diffCheckpoints({
+              cwd,
+              fromCheckpointRef: baseline,
+              toCheckpointRef: completed,
+              ignoreWhitespace: false,
+              format: "numstat",
+              useTurnBaseline: true,
+            }),
+          ),
+        ).toEqual([{ path: "app/main.ts", additions: 1, deletions: 1 }]);
+        expect(yield* git(cwd, ["show", `${completed}:sibling.txt`])).toBe("baseline");
+      }),
+    );
+
     it.effect("returns full oversized checkpoint diffs without truncation", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
@@ -261,7 +416,7 @@ it.layer(TestLayer)("CheckpointStore.layer", (it) => {
             ignoreWhitespace,
             format: "numstat",
           });
-          expect(parseTurnDiffFilesFromNumstat(numstat)).toEqual([
+          expect(parseGitNumstat(numstat)).toEqual([
             {
               path: "Component.tsx",
               additions: ignoreWhitespace ? 4 : 6,
@@ -297,10 +452,19 @@ it.layer(TestLayer)("CheckpointStore.layer", (it) => {
           format: "numstat",
         });
 
-        expect(parseTurnDiffFilesFromNumstat(numstat)).toEqual([
+        expect(parseGitNumstat(numstat)).toEqual([
           { path: "README.md", additions: lineCount, deletions: lineCount },
         ]);
         expect(numstat.length).toBeLessThan(100);
+
+        const patch = yield* checkpointStore.diffCheckpoints({
+          cwd: tmp,
+          fromCheckpointRef,
+          toCheckpointRef,
+          ignoreWhitespace: false,
+        });
+        expect(patch).toContain("diff --git a/README.md b/README.md");
+        expect(patch).toMatch(/\[truncated\]$/);
       }),
     );
 
@@ -355,9 +519,7 @@ it.layer(TestLayer)("CheckpointStore.layer", (it) => {
           ignoreWhitespace: false,
           format: "numstat" as const,
         };
-        const firstSummary = parseTurnDiffFilesFromNumstat(
-          yield* checkpointStore.diffCheckpoints(input),
-        );
+        const firstSummary = parseGitNumstat(yield* checkpointStore.diffCheckpoints(input));
         const expectedFiles = [
           { path: "binary.bin", additions: 0, deletions: 0 },
           { path: "copied.txt", additions: 0, deletions: 0 },
@@ -372,7 +534,7 @@ it.layer(TestLayer)("CheckpointStore.layer", (it) => {
         yield* fileSystem.remove(NodePath.join(tmp, "empty.txt"));
         yield* writeTextFile(NodePath.join(tmp, "copy-source.txt"), "replacement\n");
         yield* checkpointStore.captureCheckpoint({ cwd: tmp, checkpointRef: secondTurn });
-        const secondSummary = parseTurnDiffFilesFromNumstat(
+        const secondSummary = parseGitNumstat(
           yield* checkpointStore.diffCheckpoints({
             ...input,
             fromCheckpointRef: firstTurn,
@@ -384,7 +546,7 @@ it.layer(TestLayer)("CheckpointStore.layer", (it) => {
           { path: "empty.txt", additions: 0, deletions: 0 },
         ]);
 
-        const inclusiveSummary = parseTurnDiffFilesFromNumstat(
+        const inclusiveSummary = parseGitNumstat(
           yield* checkpointStore.diffCheckpoints({ ...input, toCheckpointRef: secondTurn }),
         );
         expect(inclusiveSummary).toEqual(
@@ -425,7 +587,7 @@ it.layer(TestLayer)("CheckpointStore.layer", (it) => {
           ...input,
           fallbackFromToHead: true,
         });
-        expect(parseTurnDiffFilesFromNumstat(numstat)).toEqual([
+        expect(parseGitNumstat(numstat)).toEqual([
           { path: "README.md", additions: 1, deletions: 1 },
         ]);
       }),

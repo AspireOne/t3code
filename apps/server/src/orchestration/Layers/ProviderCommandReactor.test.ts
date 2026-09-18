@@ -67,6 +67,7 @@ import {
 } from "./ProviderCommandReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
+import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Clock from "effect/Clock";
@@ -176,10 +177,12 @@ describe("ProviderCommandReactor", () => {
     readonly unreadableHistory?: boolean;
     readonly titleRegenerationCompletionDispatchFailures?: number;
     readonly titleRegenerationBeforeStart?: "one" | "two";
+    readonly threadTitleInstructions?: string;
     readonly serverActivation?: Effect.Effect<void>;
     readonly beforeReadySessionDispatch?: () => Effect.Effect<void>;
     readonly beforeTurnStartDispatch?: () => Effect.Effect<void>;
     readonly afterTurnStartDispatch?: () => Effect.Effect<void>;
+    readonly prepareTurnEffect?: Effect.Effect<void>;
     readonly compactThreadEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
     readonly interruptTurnEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
     readonly stopSessionEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
@@ -461,6 +464,11 @@ describe("ProviderCommandReactor", () => {
       }),
     ).pipe(Layer.provide(orchestrationLayer));
     const layer = ProviderCommandReactorLive.pipe(
+      Layer.provide(
+        Layer.mock(CheckpointReactor)({
+          prepareTurn: () => input?.prepareTurnEffect ?? Effect.void,
+        }),
+      ),
       Layer.provideMerge(reactorOrchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
       Layer.provideMerge(Layer.succeed(ProviderService, service)),
@@ -490,7 +498,11 @@ describe("ProviderCommandReactor", () => {
           generateThreadTitle,
         }),
       ),
-      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        ServerSettingsService.layerTest({
+          threadTitleInstructions: input?.threadTitleInstructions ?? "",
+        }),
+      ),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
@@ -849,6 +861,41 @@ describe("ProviderCommandReactor", () => {
     }),
   );
 
+  effectIt.effect("waits for the workspace baseline before the provider can edit files", () =>
+    Effect.gen(function* () {
+      const capturing = yield* Deferred.make<void>();
+      const captured = yield* Deferred.make<void>();
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          prepareTurnEffect: Deferred.succeed(capturing, undefined).pipe(
+            Effect.andThen(Deferred.await(captured)),
+          ),
+        }),
+      );
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("baseline-before-provider"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: MessageId.make("baseline-before-provider"),
+          role: "user",
+          text: "edit the file",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      });
+      yield* Deferred.await(capturing);
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      yield* Deferred.succeed(captured, undefined);
+      yield* Effect.promise(harness.drain);
+      expect(harness.sendTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ input: "edit the file" }),
+      );
+    }),
+  );
+
   it("reacts to thread.turn.start by ensuring session and sending provider turn", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
@@ -872,6 +919,13 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      return (
+        readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"))?.session
+          ?.startedAt === now
+      );
+    });
     expect(harness.startSession.mock.calls[0]?.[0]).toEqual(ThreadId.make("thread-1"));
     expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
       cwd: "/tmp/provider-project",
@@ -887,6 +941,7 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.status).toBe("starting");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+    expect(thread?.session?.startedAt).toBe(now);
   });
 
   effectIt.effect("projects inline context before sending the provider turn", () =>
@@ -1718,7 +1773,10 @@ describe("ProviderCommandReactor", () => {
   it("retries thread title generation after a transient failure", async () => {
     const now = "2026-01-01T00:00:00.000Z";
     const seededTitle = "Please investigate reconnect failures after restar...";
-    const harness = await createHarness({ initialTitle: seededTitle });
+    const harness = await createHarness({
+      initialTitle: seededTitle,
+      threadTitleInstructions: "Use sentence case for every title.",
+    });
     let attempts = 0;
     harness.generateThreadTitle.mockReturnValue(
       Effect.suspend(() => {
@@ -1755,6 +1813,11 @@ describe("ProviderCommandReactor", () => {
     await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
     expect(harness.generateThreadTitle.mock.calls[0]?.[0]).toMatchObject({
       message: "Please investigate reconnect failures after restarting the session.",
+      policy: {
+        kind: "custom",
+        threadTitleInstructions: "Use sentence case for every title.",
+        inferRepositoryConventions: false,
+      },
     });
 
     await waitFor(async () => {
@@ -1771,7 +1834,9 @@ describe("ProviderCommandReactor", () => {
   });
 
   it("regenerates a thread title from the current conversation", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({
+      threadTitleInstructions: "Prefer noun phrases over questions.",
+    });
     const now = "2026-01-01T00:00:00.000Z";
     harness.generateThreadTitle.mockReturnValue(
       Effect.succeed({ title: "Resolve stale reconnect state" }),
@@ -1842,6 +1907,11 @@ describe("ProviderCommandReactor", () => {
         "ASSISTANT:",
         "The remaining issue is stale reconnect state.",
       ].join("\n"),
+      policy: {
+        kind: "custom",
+        threadTitleInstructions: "Prefer noun phrases over questions.",
+        inferRepositoryConventions: false,
+      },
     });
     const readModel = await harness.readModel();
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));

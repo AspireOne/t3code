@@ -32,6 +32,7 @@ import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { increment, orchestrationEventsProcessedTotal } from "../../observability/Metrics.ts";
 import {
   ProviderAdapterRequestError,
@@ -40,6 +41,7 @@ import {
 } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
+import { customTextGenerationPolicy } from "../../textGeneration/TextGenerationPresets.ts";
 import { ProviderAuthService } from "../../provider/Services/ProviderAuthService.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
@@ -87,6 +89,11 @@ function toNonEmptyProviderInput(value: string | undefined): string | undefined 
   const normalized = value?.trim();
   return normalized && normalized.length > 0 ? normalized : undefined;
 }
+
+const threadTitlePolicyForInstructions = (instructions: string) =>
+  instructions.length > 0
+    ? customTextGenerationPolicy({ threadTitleInstructions: instructions })
+    : undefined;
 
 const isCompactCommandMessage = (message: ThreadTitleMessage): boolean =>
   message.role === "user" &&
@@ -211,6 +218,7 @@ const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerAuthService = yield* ProviderAuthService;
   const providerService = yield* ProviderService;
+  const checkpoints = yield* CheckpointReactor;
   const providerRegistry = yield* ProviderRegistry;
   const gitWorkflow = yield* GitWorkflowService;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -265,6 +273,7 @@ const make = Effect.gen(function* () {
     readonly kind:
       | "provider.turn.start.failed"
       | "provider.turn.interrupt.failed"
+      | "provider.context-compaction.failed"
       | "provider.approval.respond.failed"
       | "provider.user-input.respond.failed"
       | "provider.session.stop.failed";
@@ -642,6 +651,9 @@ const make = Effect.gen(function* () {
           runtimeMode: desiredRuntimeMode,
           activeTurnId: null,
           lastError: null,
+          ...(thread.session?.startedAt !== undefined
+            ? { startedAt: thread.session.startedAt }
+            : {}),
           updatedAt: createdAt,
         },
         createdAt,
@@ -735,6 +747,7 @@ const make = Effect.gen(function* () {
             // Provider turn ids are not orchestration turn ids.
             activeTurnId: null,
             lastError: session.lastError ?? null,
+            startedAt: session.createdAt,
             updatedAt: session.updatedAt,
           },
           createdAt,
@@ -950,12 +963,14 @@ const make = Effect.gen(function* () {
         const { textGenerationModelSelection: modelSelection } = yield* projectSettingsForThread(
           input.threadId,
         );
+        const { threadTitleInstructions } = yield* serverSettingsService.getSettings;
 
         const generated = yield* textGeneration
           .generateThreadTitle({
             cwd: input.cwd,
             message: input.messageText,
             ...(attachments.length > 0 ? { attachments } : {}),
+            policy: threadTitlePolicyForInstructions(threadTitleInstructions),
             modelSelection,
           })
           .pipe(
@@ -1045,15 +1060,18 @@ const make = Effect.gen(function* () {
         thread,
         projects: project ? [project] : [],
       }) ?? process.cwd();
+    const serverSettings = yield* serverSettingsService.getSettings;
     const { textGenerationModelSelection: modelSelection } = resolveProjectSettings(
-      yield* serverSettingsService.getSettings,
+      serverSettings,
       thread.projectId,
     ).settings;
+    const { threadTitleInstructions } = serverSettings;
     const generated = yield* textGeneration.generateThreadTitle({
       cwd,
       message,
       previousTitle,
       ...(attachments.length > 0 ? { attachments } : {}),
+      policy: threadTitlePolicyForInstructions(threadTitleInstructions),
       modelSelection,
     });
     if (generated.title === DEFAULT_THREAD_TITLE || generated.title === previousTitle) {
@@ -1488,6 +1506,7 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    yield* checkpoints.prepareTurn(event.payload.threadId, event.payload.createdAt);
     const send = providerService
       .sendTurn(sendTurnRequest.value)
       .pipe(Effect.asVoid, Effect.catchCause(recoverTurnStartFailure));
