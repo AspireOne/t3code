@@ -139,6 +139,7 @@ import {
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { ScopedSwitch } from "./ScopedSwitch";
+import { Textarea } from "../ui/textarea";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ThemeLibrary } from "./ThemeSettings";
@@ -516,6 +517,8 @@ export function useSettingsRestore(onRestored?: () => void) {
     settings.textGenerationModelSelection ?? null,
     DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection ?? null,
   );
+  const isThreadTitleInstructionsDirty =
+    settings.threadTitleInstructions !== DEFAULT_UNIFIED_SETTINGS.threadTitleInstructions;
   const isBackgroundActivityDirty = hasChangedBackgroundActivitySettings(settings);
 
   const changedSettingLabels = useMemo(
@@ -617,6 +620,7 @@ export function useSettingsRestore(onRestored?: () => void) {
         : []),
       ...(settings.confirmQuit !== DEFAULT_UNIFIED_SETTINGS.confirmQuit ? ["Quit shortcut"] : []),
       ...(isTextGenerationModelDirty ? ["Text generation model"] : []),
+      ...(isThreadTitleInstructionsDirty ? ["Thread title instructions"] : []),
       ...getChangedBrowserSettingLabels(settings),
       ...(settings.enableAgentBrowserAccess !== DEFAULT_UNIFIED_SETTINGS.enableAgentBrowserAccess
         ? ["Agent browser access"]
@@ -624,6 +628,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     ],
     [
       isTextGenerationModelDirty,
+      isThreadTitleInstructionsDirty,
       isBackgroundActivityDirty,
       settings.browserDefaultViewport,
       settings.browserDefaultZoomFactor,
@@ -776,6 +781,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       confirmThreadUnpin: DEFAULT_UNIFIED_SETTINGS.confirmThreadUnpin,
       confirmQuit: DEFAULT_UNIFIED_SETTINGS.confirmQuit,
       textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
+      threadTitleInstructions: DEFAULT_UNIFIED_SETTINGS.threadTitleInstructions,
       fontFamilySans: DEFAULT_UNIFIED_SETTINGS.fontFamilySans,
       fontFamilyComposer: DEFAULT_UNIFIED_SETTINGS.fontFamilyComposer,
       fontFamilyCode: DEFAULT_UNIFIED_SETTINGS.fontFamilyCode,
@@ -2150,6 +2156,8 @@ export function GeneralSettingsPanel() {
     settings,
     textGenerationModelInstanceEntries,
   );
+  const isThreadTitleInstructionsDirty =
+    settings.threadTitleInstructions !== DEFAULT_UNIFIED_SETTINGS.threadTitleInstructions;
   const resolvedBackgroundActivity = resolveServerBackgroundActivitySettings(settings);
   const activeBackgroundActivityProfile = resolvedBackgroundActivity.profile;
   const backgroundActivityProfileOption = resolveBackgroundActivityProfileOption(settings);
@@ -3092,6 +3100,39 @@ export function GeneralSettingsPanel() {
             )
           }
         />
+
+        <SettingsRow
+          {...searchableSetting("thread-title-instructions")}
+          description="Appended to the built-in title rules whenever T3 Code generates or regenerates a thread title."
+          resetAction={
+            isThreadTitleInstructionsDirty ? (
+              <SettingResetButton
+                label="thread title instructions"
+                onClick={() =>
+                  updateSettings({
+                    threadTitleInstructions: DEFAULT_UNIFIED_SETTINGS.threadTitleInstructions,
+                  })
+                }
+              />
+            ) : null
+          }
+        >
+          <div className="mt-3 max-w-2xl pb-3.5">
+            <Textarea
+              key={settings.threadTitleInstructions}
+              defaultValue={settings.threadTitleInstructions}
+              onBlur={(event) => {
+                const threadTitleInstructions = event.target.value.trim();
+                if (threadTitleInstructions !== settings.threadTitleInstructions) {
+                  updateSettings({ threadTitleInstructions });
+                }
+              }}
+              rows={4}
+              placeholder="Use sentence case and mention the main user goal."
+              aria-label="Thread title instructions"
+            />
+          </div>
+        </SettingsRow>
       </SettingsSection>
 
       <SettingsSection id="about" title="About">

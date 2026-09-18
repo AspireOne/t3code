@@ -400,6 +400,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         previousTitle: input.previousTitle,
         linkedContext: input.linkedContext,
         attachments: input.attachments,
+        policy: input.policy,
       });
 
       const generated = yield* runCodexJson({

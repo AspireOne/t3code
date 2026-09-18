@@ -132,3 +132,7 @@ Choose **Snooze → Custom…** from a thread's menu to pick a date and time in 
 local time zone, or a duration in minutes, hours, or days. Durations start when
 you confirm; one day means 24 hours. On web and desktop, you can also snooze
 several selected threads together. Choose **Wake thread** to bring a thread back early.
+
+The command palette also offers **Rename thread** and **Delete thread** for
+the current thread. In Settings → General, thread-title instructions customize
+automatically generated titles.
