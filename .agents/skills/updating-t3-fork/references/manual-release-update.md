@@ -104,9 +104,41 @@ Run from WSL after the rebase result is validated:
 ./build-install-windows.sh --build-only  # no installation
 ```
 
-One-time prerequisites: repo-pinned Vite+ toolchain, Windows Rust/MSVC
-tooling, PowerShell, and working 64/32-bit Wine for Electron Builder's
-packaging step. The helper does not install system packages.
+One-time prerequisites: Windows Rust/MSVC tooling, PowerShell, and working
+64/32-bit Wine for Electron Builder's packaging step. The helper does not
+install system packages.
+
+Toolchain to put on PATH for the helper run (none of these are installed
+system-wide here, and the global `vp` CLI is not required):
+
+```sh
+mkdir -p /tmp/opencode/node25 && cd /tmp/opencode/node25 \
+  && curl -fsSL -o node.tar.xz \
+       https://nodejs.org/dist/v25.7.0/node-v25.7.0-linux-x64.tar.xz \
+  && tar -xJf node.tar.xz --strip-components=1
+PATH="/tmp/opencode/node25/bin:$HOME/.cargo/bin:$PWD/node_modules/.bin:$PATH" \
+  ./build-install-windows.sh
+```
+
+- Node >= 25.7 is required to build the WSL runtime's single-executable
+  (`build-exe` uses Node's SEA; Node 24 fails with "does not support `exe`
+  option"). A /tmp-local toolchain leaves the system Node untouched; the
+  host Node binary becomes the base of the embedded `t3` executable.
+- `$HOME/.cargo/bin` provides cargo for the Linux resource-monitor build.
+- The repo-local `node_modules/.bin/vp` satisfies every `vp` call the
+  helper makes. Only the global-only `vp env` is unavailable, and the
+  helper does not use it.
+
+Pipeline shape since v0.0.42: the helper embeds the WSL runtime as a
+self-contained Linux CLI release archive. It builds the server
+single-executable (`apps/server/scripts/cli.ts build-exe --target
+linux-x64`), the Linux resource-monitor, packages both with the web client
+via `scripts/build-cli-archive.ts`, and hands the archive to
+`scripts/build-desktop-artifact.ts --wsl-runtime` (upstream removed the old
+`--wsl-prebuild` flag). Cross-building from a Linux host also stages
+`@yuuang/ffi-rs-linux-x64-gnu` into the Windows server sidecar so the
+bundle self-containment probe passes with the host's Node; that lives in
+`stageWindowsServerSidecar`, not in the helper.
 
 The installed fork replaces the standard per-user T3 installation and shares
 normal Windows and WSL state with official builds. The helper closes the

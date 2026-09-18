@@ -82,7 +82,8 @@ The helper builds, gracefully closes the installed executable, waits for its
 WSL backend, snapshots persistent state, installs, relaunches, and verifies
 WSL health. It refuses dirty trees. Read `--help` before changing its
 behavior; if release tooling, artifact names, or state locations changed
-upstream, update the helper deliberately before running it.
+upstream, update the helper deliberately before running it. Toolchain
+requirements and the current artifact pipeline shape are in the reference.
 
 ## Handoff
 
