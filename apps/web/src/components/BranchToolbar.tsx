@@ -80,6 +80,7 @@ interface BranchToolbarProps {
   onAutoEnvironment?: (() => void) | undefined;
   envLocked: boolean;
   onCheckoutPullRequestRequest?: (reference: string) => void;
+  onWorkingTreeOpen?: () => void;
   onComposerFocusRequest?: () => void;
   availableEnvironments?: readonly EnvironmentOption[];
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
@@ -477,6 +478,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   onAutoEnvironment,
   envLocked,
   onCheckoutPullRequestRequest,
+  onWorkingTreeOpen,
   onComposerFocusRequest,
   availableEnvironments,
   onEnvironmentChange,
@@ -675,6 +677,7 @@ export const BranchToolbar = memo(function BranchToolbar({
           startFromOrigin={startFromOrigin}
           onStartFromOriginChange={onStartFromOriginChange}
           {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
+          {...(onWorkingTreeOpen ? { onWorkingTreeOpen } : {})}
           {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
         />
       ) : null}
