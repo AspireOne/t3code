@@ -137,16 +137,32 @@ wait "$resource_pid" || resource_status=$?
 resource_pid=""
 [[ "$resource_status" = 0 ]] || fail "Windows resource-monitor build failed"
 
-wsl_prebuild="$repo_root/apps/server/node_modules/node-pty/build/Release/pty.node"
-[[ -f "$wsl_prebuild" ]] || fail "Linux node-pty prebuild is missing at $wsl_prebuild"
+version=$(jq -er '.version | select(type == "string" and length > 0)' apps/desktop/package.json)
 
-build_args=(run dist:desktop:win:x64 --skip-build --wsl-prebuild "$wsl_prebuild")
+# Upstream's Windows artifact embeds the WSL runtime as a self-contained Linux
+# CLI release archive (scripts/build-cli-archive.ts output), staged into the
+# installer as resources/wsl-runtime.tar.gz next to its SHA-256 sidecar.
+timed "linux runtime executable" node apps/server/scripts/cli.ts build-exe --target linux-x64
+
+timed "linux resource monitor" cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml
+linux_resource_monitor="$repo_root/native/resource-monitor/target/release/t3-resource-monitor"
+[[ -f "$linux_resource_monitor" ]] || fail "Linux resource-monitor binary is missing at $linux_resource_monitor"
+
+wsl_runtime_stage=$(mktemp -d)
+mkdir -p "$wsl_runtime_stage/resource-monitor"
+cp "$linux_resource_monitor" "$wsl_runtime_stage/resource-monitor/t3-resource-monitor"
+timed "wsl runtime archive" node scripts/build-cli-archive.ts \
+  --platform linux --arch x64 --version "$version" --output-dir "$wsl_runtime_stage" \
+  --resource-monitor-dir "$wsl_runtime_stage/resource-monitor"
+wsl_runtime_archive="$wsl_runtime_stage/t3-$version-linux-x64.tar.gz"
+[[ -f "$wsl_runtime_archive" ]] || fail "expected WSL runtime archive was not produced at $wsl_runtime_archive"
+
+build_args=(run dist:desktop:win:x64 --skip-build --wsl-runtime "$wsl_runtime_archive")
 if [[ "$verbose_enabled" = true ]]; then
   build_args+=(--verbose)
 fi
 T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR=true timed "package and validate" vp "${build_args[@]}"
 
-version=$(jq -er '.version | select(type == "string" and length > 0)' apps/desktop/package.json)
 artifact="$repo_root/release/T3-Code-$version-x64.exe"
 [[ -f "$artifact" ]] || fail "expected installer was not produced at $artifact"
 artifact_hash=$(sha256sum "$artifact" | awk '{print $1}')
