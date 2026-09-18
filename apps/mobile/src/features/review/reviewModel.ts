@@ -1,6 +1,7 @@
 import { parsePatchFiles } from "@pierre/diffs/utils/parsePatchFiles";
 import type { ChangeTypes, FileDiffMetadata } from "@pierre/diffs/types";
 import type { OrchestrationCheckpointSummary, ReviewDiffPreviewSource } from "@t3tools/contracts";
+import { splitGitDiffTruncationMarker } from "@t3tools/shared/git";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 import * as Order from "effect/Order";
@@ -126,33 +127,8 @@ function gitSubtitle(section: ReviewDiffPreviewSource): string | null {
   return "Base branch unavailable";
 }
 
-function stripGitPrefix(pathValue: string | undefined): string | null {
-  if (!pathValue) {
-    return null;
-  }
-  if (pathValue.startsWith("a/") || pathValue.startsWith("b/")) {
-    return pathValue.slice(2);
-  }
-  return pathValue;
-}
-
 function stripTrailingNewline(value: string): string {
   return value.endsWith("\n") ? value.slice(0, -1) : value;
-}
-
-function splitTruncationMarker(diff: string): {
-  readonly text: string;
-  readonly truncated: boolean;
-} {
-  const trimmed = diff.trimEnd();
-  if (!trimmed.endsWith("[truncated]")) {
-    return { text: trimmed, truncated: false };
-  }
-
-  return {
-    text: trimmed.replace(/\n*\[truncated\]\s*$/, "").trimEnd(),
-    truncated: true,
-  };
 }
 
 function runDiffParserSilently<T>(callback: () => T): T {
@@ -378,8 +354,8 @@ function buildRenderableRows(file: FileDiffMetadata): ReadonlyArray<ReviewRender
 }
 
 function mapRenderableFile(file: FileDiffMetadata): ReviewRenderableFile {
-  const path = stripGitPrefix(file.name) ?? stripGitPrefix(file.prevName) ?? file.name;
-  const previousPath = stripGitPrefix(file.prevName);
+  const path = file.name || file.prevName || file.name;
+  const previousPath = file.prevName || null;
   const additions = file.hunks.reduce((total, hunk) => total + hunk.additionLines, 0);
   const deletions = file.hunks.reduce((total, hunk) => total + hunk.deletionLines, 0);
   const cacheKey = file.cacheKey ?? `${previousPath ?? "none"}:${path}:${file.type}`;
@@ -478,7 +454,7 @@ export function buildReviewParsedDiff(
     return { kind: "empty" };
   }
 
-  const { text, truncated } = splitTruncationMarker(normalized);
+  const { text, truncated } = splitGitDiffTruncationMarker(normalized);
   if (text.length === 0) {
     return { kind: "empty" };
   }

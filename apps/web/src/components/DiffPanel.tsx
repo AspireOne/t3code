@@ -1,4 +1,5 @@
 import { RefreshIcon } from "~/components/ui/refresh-icon";
+import { startReviewDiffRefresh } from "@t3tools/client-runtime/state/review";
 import { useAtomValue } from "@effect/atom-react";
 import type { FileDiffContentsLoader } from "@pierre/diffs";
 import { useParams } from "@tanstack/react-router";
@@ -8,6 +9,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
 import type { ScopedThreadRef, TurnId } from "@t3tools/contracts";
+import { splitGitDiffTruncationMarker } from "@t3tools/shared/git";
 import {
   ArrowRightIcon,
   CheckIcon,
@@ -23,7 +25,7 @@ import {
   TextWrapIcon,
 } from "lucide-react";
 import * as Schema from "effect/Schema";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { useCodeViewFileReveal } from "./diffs/useCodeViewFileReveal";
 import { useOpenInPreferredEditor } from "../editorPreferences";
 import { type DraftId } from "../composerDraftStore";
@@ -35,7 +37,7 @@ import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useTheme } from "../hooks/useTheme";
 import {
   buildFileDiffContentVersion,
-  buildFileDiffIdentityKey,
+  buildFileDiffIdentityKeys,
   getDiffCollapseIconClassName,
   getDiffLineStat,
   getRenderablePatch,
@@ -252,7 +254,7 @@ export default function DiffPanel({
     },
     { enabled: isGitRepo && selectedTurn !== undefined },
   );
-  const primaryBranchDiffPreview = useEnvironmentQuery(
+  const branchDiffPreview = useEnvironmentQuery(
     selectedTurnId === null && activeThread && activeCwd
       ? reviewEnvironment.diffPreview({
           environmentId: activeThread.environmentId,
@@ -264,26 +266,6 @@ export default function DiffPanel({
         })
       : null,
   );
-  const shouldRetryBranchDiffAtEnvironmentCwd =
-    selectedTurnId === null &&
-    primaryBranchDiffPreview.error?.includes("configured workspace root") === true &&
-    serverConfig?.cwd !== undefined &&
-    serverConfig.cwd !== activeCwd;
-  const fallbackBranchDiffPreview = useEnvironmentQuery(
-    shouldRetryBranchDiffAtEnvironmentCwd && activeThread && serverConfig
-      ? reviewEnvironment.diffPreview({
-          environmentId: activeThread.environmentId,
-          input: {
-            cwd: serverConfig.cwd,
-            ...(selectedBaseRef ? { baseRef: selectedBaseRef } : {}),
-            ignoreWhitespace: diffIgnoreWhitespace,
-          },
-        })
-      : null,
-  );
-  const branchDiffPreview = shouldRetryBranchDiffAtEnvironmentCwd
-    ? fallbackBranchDiffPreview
-    : primaryBranchDiffPreview;
   const refreshBranchDiffPreview = branchDiffPreview.refresh;
   const canRefreshGitDiff =
     isGitRepo && selectedTurnId === null && activeThread != null && activeCwd != null;
@@ -291,11 +273,23 @@ export default function DiffPanel({
     ? `${routeThreadRef.environmentId}:${routeThreadRef.threadId}`
     : null;
 
+  const isGitDiffPending = useEffectEvent(() => branchDiffPreview.isPending);
   useEffect(() => {
     if (!canRefreshGitDiff) return;
-    const refreshOnFocus = () => refreshBranchDiffPreview();
+    const refresh = startReviewDiffRefresh({
+      active: document.visibilityState === "visible",
+      refresh: refreshBranchDiffPreview,
+      isPending: () => isGitDiffPending(),
+    });
+    const refreshOnFocus = () => refresh.requestRefresh();
+    const onVisibilityChange = () => refresh.setActive(document.visibilityState === "visible");
     window.addEventListener("focus", refreshOnFocus);
-    return () => window.removeEventListener("focus", refreshOnFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      refresh.dispose();
+      window.removeEventListener("focus", refreshOnFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, [canRefreshGitDiff, refreshBranchDiffPreview]);
 
   useWorkspaceMutationRefresh({
@@ -386,8 +380,15 @@ export default function DiffPanel({
   ];
   const gitDiff = selectedGitSource?.diff;
 
-  const selectedPatch = selectedTurn ? activeCheckpointDiff.data?.diff : gitDiff;
-  const isSelectedPatchTruncated = !selectedTurn && selectedGitSource?.truncated === true;
+  const selectedPatchResult = selectedTurn
+    ? activeCheckpointDiff.data
+      ? splitGitDiffTruncationMarker(activeCheckpointDiff.data.diff)
+      : null
+    : null;
+  const selectedPatch = selectedTurn ? selectedPatchResult?.text : gitDiff;
+  const isSelectedPatchTruncated = selectedTurn
+    ? selectedPatchResult?.truncated === true
+    : selectedGitSource?.truncated === true;
   const isLoadingSelectedPatch = selectedTurn
     ? activeCheckpointDiff.isPending
     : branchDiffPreview.isPending;
@@ -412,15 +413,14 @@ export default function DiffPanel({
       }),
     );
   }, [renderablePatch]);
-  const renderableFileEntries = useMemo(
-    () =>
-      renderableFiles.map((fileDiff) => ({
-        fileDiff,
-        fileKey: buildFileDiffIdentityKey(fileDiff),
-        fileVersion: buildFileDiffContentVersion(fileDiff),
-      })),
-    [renderableFiles],
-  );
+  const renderableFileEntries = useMemo(() => {
+    const fileKeys = buildFileDiffIdentityKeys(renderableFiles);
+    return renderableFiles.map((fileDiff, index) => ({
+      fileDiff,
+      fileKey: fileKeys[index]!,
+      fileVersion: buildFileDiffContentVersion(fileDiff),
+    }));
+  }, [renderableFiles]);
   const defaultCollapsedDiffFileKeys = useMemo(
     () =>
       settings.diffFilesCollapsed

@@ -149,8 +149,13 @@ function testedBaseName(path: string): string {
 export function orderDiffFiles(
   files: ReadonlyArray<FileDiffMetadata>,
 ): ReadonlyArray<FileDiffMetadata> {
-  const byPath = new Map<string, FileDiffMetadata>();
-  for (const file of files) byPath.set(resolveFileDiffPath(file), file);
+  const byPath = new Map<string, FileDiffMetadata[]>();
+  for (const file of files) {
+    const path = resolveFileDiffPath(file);
+    const records = byPath.get(path);
+    if (records) records.push(file);
+    else byPath.set(path, [file]);
+  }
   const tiers = new Map<string, DiffFileTier>();
   for (const path of byPath.keys()) tiers.set(path, diffFileTier(path));
 
@@ -168,10 +173,15 @@ export function orderDiffFiles(
 
   const imports = new Map<string, ReadonlySet<string>>();
   for (const path of sourcePaths) {
-    const file = byPath.get(path)!;
+    const records = byPath.get(path)!;
     imports.set(
       path,
-      importedPaths(path, [...file.additionLines, ...file.deletionLines], byModulePath, byBaseName),
+      importedPaths(
+        path,
+        records.flatMap((file) => [...file.additionLines, ...file.deletionLines]),
+        byModulePath,
+        byBaseName,
+      ),
     );
   }
   const orderedSource = orderByImports(sourcePaths, imports);
@@ -193,5 +203,7 @@ export function orderDiffFiles(
     .filter((path) => tiers.get(path) === "generated")
     .sort((left, right) => left.localeCompare(right));
 
-  return [...orderedSource, ...orderedTests, ...orderedGenerated].map((path) => byPath.get(path)!);
+  return [...orderedSource, ...orderedTests, ...orderedGenerated].flatMap((path) =>
+    byPath.get(path)!,
+  );
 }

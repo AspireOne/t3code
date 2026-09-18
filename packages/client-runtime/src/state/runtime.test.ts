@@ -271,6 +271,18 @@ describe("environmentRpcKey", () => {
       }),
     ).not.toBe(environmentRpcKey(originalTarget));
   });
+
+  it("isolates cached queries by a cache-only scope", () => {
+    const target = {
+      environmentId: EnvironmentId.make("environment-1"),
+      input: { threadId: "thread-1", fromTurnCount: 1, toTurnCount: 2 },
+    };
+
+    expect(environmentRpcKey({ ...target, cacheScope: "turn-old" })).not.toBe(
+      environmentRpcKey({ ...target, cacheScope: "turn-replacement" }),
+    );
+    expect(environmentRpcKey({ ...target, cacheScope: null })).toBe(environmentRpcKey(target));
+  });
 });
 
 describe("environment query lifecycle", () => {

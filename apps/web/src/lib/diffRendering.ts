@@ -144,11 +144,7 @@ export function getRenderablePatch(
 }
 
 export function resolveFileDiffPath(fileDiff: FileDiffMetadata): string {
-  const raw = fileDiff.name ?? fileDiff.prevName ?? "";
-  if (raw.startsWith("a/") || raw.startsWith("b/")) {
-    return raw.slice(2);
-  }
-  return raw;
+  return fileDiff.name ?? fileDiff.prevName ?? "";
 }
 
 /**
@@ -156,15 +152,30 @@ export function resolveFileDiffPath(fileDiff: FileDiffMetadata): string {
  * path, and the hosts that resolve a diff position against both sides need both names.
  */
 export function resolveFileDiffPreviousPath(fileDiff: FileDiffMetadata): string {
-  const raw = fileDiff.prevName ?? fileDiff.name ?? "";
-  if (raw.startsWith("a/") || raw.startsWith("b/")) {
-    return raw.slice(2);
-  }
-  return raw;
+  return fileDiff.prevName ?? fileDiff.name ?? "";
 }
 
 export function buildFileDiffIdentityKey(fileDiff: FileDiffMetadata): string {
   return `${resolveFileDiffPreviousPath(fileDiff)}\u0000${resolveFileDiffPath(fileDiff)}`;
+}
+
+/**
+ * Git emits a type change as separate delete and add records for the same path. CodeView requires
+ * every record to have a unique ID, so qualify repeated path identities by their patch order.
+ */
+export function buildFileDiffIdentityKeys(
+  files: ReadonlyArray<FileDiffMetadata>,
+): ReadonlyArray<string> {
+  return qualifyFileDiffKeysByOccurrence(files.map(buildFileDiffIdentityKey));
+}
+
+function qualifyFileDiffKeysByOccurrence(keys: ReadonlyArray<string>): ReadonlyArray<string> {
+  const occurrences = new Map<string, number>();
+  return keys.map((key) => {
+    const occurrence = occurrences.get(key) ?? 0;
+    occurrences.set(key, occurrence + 1);
+    return `${key}\u0000${occurrence}`;
+  });
 }
 
 export function buildFileDiffRenderKey(fileDiff: FileDiffMetadata): string {
@@ -172,6 +183,12 @@ export function buildFileDiffRenderKey(fileDiff: FileDiffMetadata): string {
   if (!cacheKey) return `${fileDiff.prevName ?? "none"}:${fileDiff.name}`;
 
   return cacheKey.endsWith(":hydrated") ? cacheKey.slice(0, -":hydrated".length) : cacheKey;
+}
+
+export function buildFileDiffRenderKeys(
+  files: ReadonlyArray<FileDiffMetadata>,
+): ReadonlyArray<string> {
+  return qualifyFileDiffKeysByOccurrence(files.map(buildFileDiffRenderKey));
 }
 
 function hashFileDiffPart(hash: number, value: string | number | boolean | undefined): number {
