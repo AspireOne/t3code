@@ -1,3 +1,27 @@
+# Local environment: WSL + Vite+
+
+This fork is maintained from WSL on a Windows 11 host. Vite+ is intentionally not installed globally. The `vp` command is provided by a user-local symlink:
+
+```bash
+ln -sfn "$HOME/.local/share/vite-plus/bin/vp" "$HOME/.local/bin/vp"
+```
+
+Use Vite+ for this repository's package-manager, runtime, check, and build workflows:
+
+- `vp install` installs the workspace dependencies and runs the repository's prepare hook.
+- `vp env exec ...` and `vp node ...` use the project-resolved Node.js toolchain without replacing the normal system toolchain. `vp env current` shows the resolved versions.
+- `vp check` runs the repository checks.
+- `vp run build` runs the repository's full app build. Direct `vp build` is Vite+'s single-package Vite build and needs a target at this workspace root.
+- `vp run dev` runs the repository's full T3 server and web development stack. Direct `vp dev` only runs Vite's built-in dev server and does not start the T3 server.
+
+This checkout is the main Git checkout rather than a linked worktree, so the dev runner otherwise falls back to the live `~/.t3` home. Always isolate dev state explicitly:
+
+```bash
+vp run dev --home-dir "$PWD/.t3"
+```
+
+The `--home-dir` value is the T3 Code data directory; runtime state is stored below its `userdata` directory. Linked worktrees select their own ignored `.t3` automatically, but passing `--home-dir` explicitly is still fine when testing.
+
 # T3 Code
 
 T3 Code is a minimal GUI for coding agents. A Node WebSocket server wraps provider CLIs and agents (Codex, Claude Code, Cursor, Grok, OpenCode, Antigravity) and serves web, desktop, and mobile clients.
