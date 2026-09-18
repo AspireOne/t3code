@@ -14,8 +14,8 @@ Git top-level is not an acceptable workaround. This fork now carries the
 nested-workspace review and checkpoint fix.
 
 The fork currently adds a desktop notification when a newer stable upstream
-release is available. It does not download, merge, build, or install updates;
-release synchronization remains the explicit workflow documented below.
+release is available. It does not download or install updates; release
+synchronization remains the explicit workflow documented below.
 
 Fork builds should preserve normal T3 behavior, including Codex, Windows/WSL,
 and T3's production Connect infrastructure; they must not introduce client

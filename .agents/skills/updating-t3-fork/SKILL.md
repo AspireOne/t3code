@@ -1,115 +1,94 @@
 ---
 name: updating-t3-fork
-description: Synchronizes this AspireOne T3 Code fork to an official upstream release, resolves and validates merge conflicts, and builds or installs the Windows desktop artifact with WSL support. Use when the user asks to update the fork, sync with the latest T3 Code release, merge an upstream release, rebuild the fork, or install a new fork version. Do not use for ordinary feature work, unreleased upstream-main snapshots, or pipeline design unless release synchronization is also requested.
+description: Rebases this AspireOne T3 Code fork onto an official upstream release, resolves conflicts one fork commit at a time, validates, and optionally builds and installs the Windows artifact from WSL. Use when the user asks to update the fork, sync or rebase onto upstream, move to a new T3 Code release, or rebuild or install a new fork version. Not for ordinary feature work unless release synchronization is also requested.
 ---
 
 # Updating the T3 fork
 
-## Goal
+## Model
 
-Bring the fork forward to an exact official upstream release without losing its
-small local changes, then optionally build and install a verified Windows/WSL
-desktop update. Keep the operation reproducible and leave a clear record of the
-release tag and commit used.
+`main` is exactly one stable upstream release plus a small stack of fork
+commits. A sync moves that stack onto a newer release:
+
+- upstream release base = the release tag plus its post-tag
+  `chore(release): prepare vX` version bump, nothing newer;
+- the fork commits replay on top, one at a time, as a rebase.
+
+The rebase is the point: when a conflict fires, it names the exact fork
+commit whose code upstream touched, so each decision is local and explicit —
+rework the fork commit onto the new upstream implementation, or drop it
+because upstream now covers it.
 
 ## Before changing anything
 
-1. Read the repository `AGENTS.md`, `FORK_CONTEXT.md`, and
-   `FORK-MAINTENANCE.md`.
-2. Inspect the current upstream README, contribution guide, package manifests,
-   release notes, and `scripts/build-desktop-artifact.ts`. Upstream build or
-   release behavior may have changed since this skill was written.
-3. Confirm `origin` is the AspireOne fork and `upstream` fetches
-   `https://github.com/pingdotgg/t3code.git`. Keep upstream push disabled.
-4. Require a clean worktree. Do not stash, discard, or absorb unrelated user
-   changes merely to make the update proceed.
+1. Read repository `AGENTS.md`, `FORK_CONTEXT.md`, and `FORK-MAINTENANCE.md`.
+2. Skim the release notes and `scripts/build-desktop-artifact.ts`; build
+   behavior may have changed.
+3. `origin` is the fork; `upstream` is `pingdotgg/t3code` with push disabled.
+4. Require a clean worktree. Never stash or absorb unrelated user changes.
 
-Read [references/manual-release-update.md](references/manual-release-update.md)
-for the command-level workflow.
+Command-level workflow: [references/manual-release-update.md](references/manual-release-update.md).
 
 ## Release selection
 
-- Default to GitHub's latest non-draft, non-prerelease upstream release. Do not
-  treat nightly or desktop-preview releases as stable.
-- Use a nightly only when the user explicitly requests the nightly channel.
-- Fetch upstream and tags, then resolve the release tag to its commit. Merge
-  that tag, not `upstream/main`, so the fork contains exactly the intended
-  released upstream history rather than later unreleased commits.
-- Upstream may update package manifests only in the first post-tag release
-  commit (usually `chore(release): prepare vX`). Include that version bump
-  before building, or the fork can report the previous version and show a
-  stale update notice.
-- If the release commit is already an ancestor of the fork, report that the
-  fork is already at or ahead of that release. Never roll a newer fork back to
-  the latest stable release automatically.
+- Latest stable upstream release only. Never nightly or prerelease tags.
+- Resolve the tag to its commit; it must be reachable from `upstream/main`.
+- Upstream bumps package versions in the first post-tag
+  `chore(release): prepare vX` commit. Rebase onto that commit, not the bare
+  tag, or the fork reports the previous version and shows a stale update
+  notice.
+- If the selected release is already an ancestor of `main`, report that the
+  fork is current and stop. Never roll `main` back.
 
 ## Integration workflow
 
-Use the temporary sync branch as a safety boundary: `main` stays known-good
-while conflicts, builds, and verification are in progress. The branch does not
-add history of its own and is deleted after the validated result is
-fast-forwarded to `main`.
+1. Branch `sync/upstream-<tag>` from `main`.
+2. Rebase the fork stack onto the release base. Drop the fork's own stale
+   `chore(release): prepare` commit from the replay — the new base carries
+   the new version.
+3. Resolve conflicts per replayed commit:
+   - prefer upstream for unrelated implementation churn;
+   - keep the intent of focused fork commits, reworked for new surroundings;
+   - if upstream now implements a fork change, drop that fork commit, and
+     only after checking the released behavior actually covers it;
+   - never resolve with blanket ours/theirs.
+4. Run `vp i` when manifests or the lockfile changed.
+5. Verify: the release base is an ancestor of the result, `git log` from the
+   base is the expected fork stack (every dropped commit deliberately
+   superseded), and manifests show the new version.
+6. Run focused checks for conflicted areas plus the desktop production build.
+   The Windows helper's build satisfies this during a full install; do not
+   build the same revision twice. No repository-wide checks unless requested.
+7. Publish only for a real sync, not for a trial, dry run, or build-only
+   request: create `backup/pre-sync-<tag>` at the old `main`, update `main`
+   to the validated sync branch, `git push --force-with-lease origin main`,
+   delete the sync branch. Publishing rewrites fork SHAs, so force-push goes
+   to `origin` only. Never push `upstream`.
 
-1. Create a branch named `sync/upstream-<tag>` from the fork's current `main`.
-2. Merge the release tag. Preserve history; do not reset or force-push `main`.
-3. Resolve conflicts by understanding both changes:
-   - Prefer upstream for unrelated implementation churn.
-   - Preserve the intent of focused fork commits when upstream has not replaced
-     them.
-   - When upstream contains an equivalent local fix, remove the redundant fork
-     change only after verifying the released behavior.
-   - Never choose `ours` or `theirs` across a broad path without inspecting the
-     resulting code.
-4. Re-run `vp i` when manifests or the lockfile changed.
-5. Verify the release commit is an ancestor of the result and inspect the
-   remaining fork-only commits.
-6. Run the smallest relevant checks plus the desktop production build. The
-   Windows artifact helper's build satisfies this step during a full install;
-   do not build the same revision twice without a reason. Do not run
-   repository-wide checks unless the user requests them.
-7. Fast-forward local `main` to the validated sync branch, push `origin/main`,
-   and delete the local sync branch. This completes the normal release-sync
-   workflow. Skip updating `main` or pushing only when the user explicitly asks
-   for a local-only trial, dry run, or build-only operation. Never push
-   upstream or force-push.
-
-Do not open a pull request unless explicitly requested.
+The repo relies on global `rerere`: recurring conflicts resolve from recorded
+solutions automatically, but re-check what a replayed solution actually did.
 
 ## Windows build and installation
 
 Building does not imply permission to install. Install only when the user asks
 for installation or an end-to-end update.
 
-For the current WSL-to-Windows packaging path, use:
-
 ```sh
-./build-install-windows.sh
+./build-install-windows.sh            # build, install, relaunch, verify
+./build-install-windows.sh --build-only
 ```
 
-The root helper builds first, then gracefully closes the exact installed T3
-executable, waits for its WSL backend to stop, snapshots persistent state,
-installs the new NSIS artifact, relaunches it, and verifies local WSL health.
-It refuses dirty trees and does not force-kill the app. Use `--build-only` when
-installation was not requested, and read `--help` before changing its behavior.
+The helper builds, gracefully closes the installed executable, waits for its
+WSL backend, snapshots persistent state, installs, relaunches, and verifies
+WSL health. It refuses dirty trees. Read `--help` before changing its
+behavior; if release tooling, artifact names, or state locations changed
+upstream, update the helper deliberately before running it.
 
-Treat the helper as an implementation of the current workflow, not permanent
-upstream truth. If release tooling, native dependencies, artifact names, app
-identity, or state locations changed, update the helper deliberately before
-running it.
+## Handoff
 
-## Verification and handoff
+Report: selected tag and resolved commit; each conflicted or dropped fork
+commit with its decision; checks and builds run; artifact path and SHA-256;
+backup path when installation occurred; installed version and WSL backend
+health; final branch, remotes, and `git status`.
 
-Confirm and report:
-
-- selected release tag and resolved upstream commit;
-- merge/conflict decisions and remaining fork-only commits;
-- checks and builds run;
-- artifact path and SHA-256;
-- backup path when installation occurred;
-- installed executable, launched version, and WSL backend health;
-- production T3 Connect status when relevant to the release or requested;
-- final branch, remotes, and `git status`.
-
-Keep the nested-workspace project structure intact. Updating the fork does not
-authorize unrelated fixes, a self-hosted Connect deployment, or changes to the
-user's project layout.
+Do not open a pull request unless explicitly asked.

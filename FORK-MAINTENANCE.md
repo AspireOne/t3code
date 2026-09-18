@@ -22,15 +22,18 @@ From the repository root in WSL:
 
 For an official release update, use the repository's
 [`updating-t3-fork`](./.agents/skills/updating-t3-fork/SKILL.md) skill.
-It merges the exact stable release tag on a temporary integration branch and
-validates the result before moving `main`, pushing `origin/main`, and deleting
-the temporary branch. Those final steps are skipped only for an explicitly
+`main` is a stable upstream release plus a small stack of fork commits; a sync
+rebases that stack onto the new release's post-tag version bump on a
+temporary sync branch, resolving conflicts one fork commit at a time. The
+result is published with `git push --force-with-lease origin main` — the
+rebase rewrites fork SHAs — and a `backup/pre-sync-*` branch keeps the
+previous tip for rollback. Publishing is skipped only for an explicitly
 local-only, dry-run, or build-only update.
 
 `origin` is the fork and `upstream` is `pingdotgg/t3code`. Never push to
-`upstream`; its push URL is intentionally disabled. Do not sync by merging
-`upstream/main`: it may contain unreleased work. The skill selects and merges
-the exact latest stable release tag.
+`upstream`; its push URL is intentionally disabled. Do not sync against
+`upstream/main` directly: it may contain unreleased work. The skill selects
+the exact latest stable release tag and rebases onto it.
 
 ## Install and run from source
 

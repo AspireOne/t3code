@@ -1,24 +1,17 @@
 # Manual release update
 
-Use this reference for the current command-level workflow. Re-check upstream
-documentation and scripts before executing it after a future release.
+Command-level workflow for the rebase sync. Re-check upstream tooling and
+scripts when release behavior changes.
 
 ## Resolve the upstream release
 
-Use the available GitHub CLI (`gh` in WSL or `gh.exe` from Windows):
-
 ```sh
-gh_command=gh
-command -v gh >/dev/null 2>&1 || gh_command=gh.exe
+gh_command=gh; command -v gh >/dev/null 2>&1 || gh_command=gh.exe
 "$gh_command" api repos/pingdotgg/t3code/releases/latest \
   --jq '{tag: .tag_name, commit: .target_commitish, published: .published_at}'
 ```
 
-`releases/latest` selects the latest stable release. For an explicitly
-requested nightly, inspect `gh release list --repo pingdotgg/t3code` and select
-the intended prerelease tag rather than guessing from local tags.
-
-Fetch and verify the tag:
+`releases/latest` selects the latest stable release. Fetch and verify:
 
 ```sh
 git fetch upstream main --tags --prune
@@ -27,88 +20,103 @@ release_commit=$(git rev-parse "$release_tag^{commit}")
 git merge-base --is-ancestor "$release_commit" upstream/main
 ```
 
-Stop if the tag is missing, is not reachable from upstream history, or does not
-match the selected GitHub release.
+Stop if the tag is missing, unreachable, or does not match the selected
+GitHub release.
 
-## Merge on an integration branch
+## Find the rebase base
 
-Start only from a clean fork `main`:
+Upstream bumps package versions in the first post-tag
+`chore(release): prepare vX` commit:
+
+```sh
+prepare_commit=$(git log --format='%H %s' "$release_commit..upstream/main" \
+  | grep -m1 'chore(release): prepare' | cut -d' ' -f1)
+```
+
+If no prepare commit exists yet, use `$release_commit` as the base and flag
+the missing version bump in the report.
+
+## Rebase on a sync branch
 
 ```sh
 git switch main
 git pull --ff-only origin main
+old_base=$(git merge-base main upstream/main)
+git log --oneline "$old_base"..main > /tmp/fork-stack-before.txt
 git switch -c "sync/upstream-${release_tag#v}"
-git merge --no-edit "$release_tag"
+GIT_SEQUENCE_EDITOR="sed -i '/chore(release): prepare v/d'" \
+  git rebase -i --empty=drop --onto "$prepare_commit" "$old_base"
 ```
 
-If conflicts occur, inspect the conflicting commits and current upstream code.
-Resolve the fork's intent on top of the released implementation, stage only the
-resolved files, and continue the merge. Abort and report rather than making an
-uncertain semantic choice.
+The sequence editor removes the fork's own stale `chore(release): prepare`
+commit from the replay; the new base carries the new version. `--empty=drop`
+retires fork commits whose changes upstream now carries.
 
-Verify the result:
+On conflict, the rebase stops at the exact fork commit in question. Resolve
+per the SKILL.md principles, then:
 
 ```sh
-git merge-base --is-ancestor "$release_commit" HEAD
-git log --oneline "$release_commit"..HEAD
+git add <resolved files>
+git rebase --continue
+```
+
+`git rebase --abort` returns to the untouched branch at any point; prefer
+aborting and reporting over guessing through a conflict.
+
+## Verify
+
+```sh
+git merge-base --is-ancestor "$prepare_commit" HEAD
+git log --oneline "$prepare_commit"..HEAD
+grep '"version"' apps/desktop/package.json
 git diff --check
-vp i
-vp run build:desktop # omit when the Windows artifact helper runs next
+vp i                                      # when manifests or lockfile changed
+vp run build:desktop                      # or leave to the Windows helper
 ```
 
-Run focused checks for conflict-affected areas. Do not fix unrelated failures
-or the nested-workspace bug as part of a release sync.
+Compare `git log --oneline "$prepare_commit"..HEAD` against
+`/tmp/fork-stack-before.txt`: every commit from the before-list must appear,
+or have been deliberately dropped as superseded. Then run focused checks for
+every conflicted area.
 
-After validation, complete the normal update by fast-forwarding `main`, pushing
-the fork remote, and deleting the temporary local branch:
+## Publish
 
 ```sh
+git branch "backup/pre-sync-${release_tag#v}" main        # while main is old
 git switch main
-git merge --ff-only "sync/upstream-${release_tag#v}"
-git push origin main
-git branch -d "sync/upstream-${release_tag#v}"
+git reset --hard "sync/upstream-${release_tag#v}"
+git push --force-with-lease origin main
+git branch -D "sync/upstream-${release_tag#v}"
 ```
 
-Only omit these final steps when the user explicitly requested a local-only
-trial, dry run, or build-only operation.
+`backup/pre-sync-*` keeps the previous tip for rollback
+(`git reset --hard backup/pre-sync-<tag>` and force-push again). Skip these
+steps only for an explicitly local-only trial, dry run, or build-only
+operation.
 
 ## Build and install on Windows
 
-The helper is intended to be run from WSL after the merge result is clean:
+Run from WSL after the rebase result is validated:
 
 ```sh
-./build-install-windows.sh
+./build-install-windows.sh               # build, install, relaunch, verify
+./build-install-windows.sh --preflight   # prerequisites only
+./build-install-windows.sh --build-only  # no installation
 ```
 
-Useful modes:
+One-time prerequisites: repo-pinned Vite+ toolchain, Windows Rust/MSVC
+tooling, PowerShell, and working 64/32-bit Wine for Electron Builder's
+packaging step. The helper does not install system packages.
 
-```sh
-# Validate prerequisites without building or changing the installation.
-./build-install-windows.sh --preflight
-
-# Build and validate the artifact, leaving the running installation untouched.
-./build-install-windows.sh --build-only
-
-# Build, back up state, install, and relaunch without waiting for WSL health.
-./build-install-windows.sh --no-verify
-```
-
-Current one-time prerequisites are the repo-pinned Vite+ toolchain, Windows
-Rust/MSVC tooling, PowerShell, and working 64/32-bit Wine in WSL for Electron
-Builder's Windows packaging step. The helper deliberately does not install
-system packages.
-
-The installed fork currently replaces the standard per-user T3 installation
-and shares normal Windows and WSL state with official builds. The helper closes
-the exact installed executable and backs up `~/.t3`, `%APPDATA%/t3code`, and
+The installed fork replaces the standard per-user T3 installation and shares
+normal Windows and WSL state with official builds. The helper closes the
+exact installed executable and backs up `~/.t3`, `%APPDATA%/t3code`, and
 `%APPDATA%/T3 Code (Alpha)` when present. It does not support simultaneous
 official and forked WSL backends or a side-by-side fork package.
 
 ## Future CI boundary
 
-The manual workflow is the executable specification for later automation. A
-scheduled workflow can detect a new stable release, fetch its tag, create a
-sync branch, attempt the merge, run builds, and open or update a reviewable pull
-request. It should stop on conflicts rather than invent resolutions or push a
-conflicted merge directly to `main`; conflict resolution and local patch
-retirement still require judgment.
+This manual workflow is the specification for later automation: a scheduled
+job can detect a release, rebase the fork stack, and run builds. It must stop
+on conflicts rather than invent resolutions; conflict resolution and
+superseded-commit retirement need judgment.
